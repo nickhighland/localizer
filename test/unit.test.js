@@ -191,3 +191,40 @@ test('proxy: honours the per-service rewrite toggle', () => {
 test.after(() => {
   fs.rmSync(process.env.CONFIG_DIR, { recursive: true, force: true });
 });
+
+test('proxy: X-Forwarded headers can be suppressed per service', () => {
+  // Home Assistant answers 400 to any request carrying X-Forwarded-For unless
+  // its trusted_proxies list names the sender, so this must be switchable.
+  const req = {
+    headers: { host: 'homeassistant.local', 'x-forwarded-for': '10.0.0.9', accept: '*/*' },
+    socket: { remoteAddress: '192.168.4.3' },
+  };
+  const off = proxy.buildUpstreamHeaders(req, {
+    host: '172.17.0.1', port: 8123, preserveHost: true, forwardedHeaders: false,
+  }, { proxyPort: 80 });
+
+  for (const name of Object.keys(off)) {
+    assert.ok(!/^x-(forwarded|real-ip)/.test(name), `${name} should have been stripped`);
+  }
+  assert.equal(off.host, 'homeassistant.local', 'the Host header still passes through');
+  assert.equal(off.accept, '*/*', 'ordinary headers are untouched');
+});
+
+test('proxy: X-Forwarded headers are sent by default', () => {
+  const req = {
+    headers: { host: 'sonarr.local' },
+    socket: { remoteAddress: '192.168.4.3' },
+  };
+  const on = proxy.buildUpstreamHeaders(req, {
+    host: '172.17.0.1', port: 8989, preserveHost: true,
+  }, { proxyPort: 80 });
+
+  assert.equal(on['x-forwarded-for'], '192.168.4.3');
+  assert.equal(on['x-real-ip'], '192.168.4.3');
+  assert.equal(on['x-forwarded-host'], 'sonarr.local');
+});
+
+test('config: forwardedHeaders defaults on and round-trips', () => {
+  assert.equal(config.normalizeService({ name: 'a', hostname: 'a', host: '1.2.3.4' }).forwardedHeaders, true);
+  assert.equal(config.normalizeService({ name: 'a', hostname: 'a', host: '1.2.3.4', forwardedHeaders: false }).forwardedHeaders, false);
+});

@@ -157,6 +157,7 @@ function openModal(service) {
     name: '', hostname: '', scheme: 'http', host: '', port: '', description: '',
     icon: '', color: '#4f8cff', enabled: true, showOnDashboard: true,
     websockets: true, preserveHost: true, rewriteRedirects: true, insecureTls: false,
+    forwardedHeaders: true,
   };
 
   const nameInput = el('input', { class: 'input', id: 'f-name', value: s.name, placeholder: 'Open WebUI' });
@@ -317,6 +318,7 @@ function openModal(service) {
       toggle('f-dash', 'Show on dashboard', 'Include this tile on the launch screen.', s.showOnDashboard),
       toggle('f-ws', 'Forward WebSockets', 'Needed for live UIs like Open WebUI, Sonarr and Portainer.', s.websockets),
       toggle('f-preserve', 'Preserve Host header', 'Send the .local name upstream. Turn off if the app misbehaves.', s.preserveHost),
+      toggle('f-fwd', 'Send X-Forwarded headers', 'Tells the app who the real client is. Home Assistant answers 400 unless its trusted_proxies is set — turn this off instead.', s.forwardedHeaders),
       toggle('f-redir', 'Rewrite redirects', 'Rewrite upstream redirects that point back at its raw IP.', s.rewriteRedirects),
       toggle('f-tls', 'Ignore TLS certificate errors', 'For HTTPS targets using a self-signed certificate.', s.insecureTls),
     ]),
@@ -344,6 +346,7 @@ function openModal(service) {
       showOnDashboard: form.querySelector('#f-dash').checked,
       websockets: form.querySelector('#f-ws').checked,
       preserveHost: form.querySelector('#f-preserve').checked,
+      forwardedHeaders: form.querySelector('#f-fwd').checked,
       rewriteRedirects: form.querySelector('#f-redir').checked,
       insecureTls: form.querySelector('#f-tls').checked,
     };

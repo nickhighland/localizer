@@ -56,6 +56,16 @@ function buildUpstreamHeaders(req, service, { proxyPort }) {
     ? req.headers.host
     : `${service.host}:${service.port}`;
 
+  // Home Assistant (and a few others) answer 400 to any request carrying
+  // X-Forwarded-For unless their own trusted_proxies list is configured, so
+  // this has to be switchable per service.
+  if (service.forwardedHeaders === false) {
+    for (const name of Object.keys(headers)) {
+      if (/^x-(forwarded-|real-ip)/.test(name.toLowerCase())) delete headers[name];
+    }
+    return headers;
+  }
+
   const existingFor = req.headers['x-forwarded-for'];
   const ip = clientIp(req);
   headers['x-forwarded-for'] = existingFor ? `${existingFor}, ${ip}` : ip;
@@ -258,4 +268,6 @@ function forwardUpgrade(req, clientSocket, head, service, { proxyPort, logger = 
   upstream.on('close', () => clientSocket.destroy());
 }
 
-module.exports = { forward, forwardUpgrade, errorPage, filterHeaders, rewriteLocation };
+module.exports = {
+  forward, forwardUpgrade, errorPage, filterHeaders, rewriteLocation, buildUpstreamHeaders,
+};

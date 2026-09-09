@@ -116,6 +116,7 @@ function normalizeService(s) {
     enabled: s.enabled !== false,
     showOnDashboard: s.showOnDashboard !== false,
     preserveHost: s.preserveHost !== false,
+    forwardedHeaders: s.forwardedHeaders !== false,
     websockets: s.websockets !== false,
     insecureTls: s.insecureTls === true,
     rewriteRedirects: s.rewriteRedirects !== false,

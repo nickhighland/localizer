@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.3.0
+
+### Added
+
+- **Per-service "Send X-Forwarded headers" toggle.** Home Assistant answers `400 Bad Request` to
+  any request carrying `X-Forwarded-For` unless its own `trusted_proxies` list names the sender.
+  Rather than requiring everyone to edit `configuration.yaml`, the headers can now be switched off
+  for a single service.
+
 ## 1.1.1
 
 Fixes the version string, which still reported 1.0.0 in the 1.1.0 image.
