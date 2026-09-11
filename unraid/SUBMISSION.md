@@ -15,7 +15,7 @@ is picked up, and every later change flows through automatically without another
 
 That means: **you submit the repository, not the app.** Future versions need no further action.
 
-## Pre-flight
+## Pre-flight — all verified
 
 | Check | Status |
 |---|---|
@@ -23,10 +23,10 @@ That means: **you submit the repository, not the app.** Future versions need no 
 | All required fields present (Name, Repository, Registry, Network, Support, Project, Overview, Category, Icon, WebUI, TemplateURL) | ✅ |
 | Categories exist in CA's `categoryList.json` — `Network:Proxy`, `Network:DNS`, `Tools:Utilities` | ✅ |
 | Every `<Config>` block has Name/Target/Type/Mode/Display/Required/Mask | ✅ |
-| Image is public and pulls anonymously | check after the 2.0.0 release |
-| Image is multi-arch (linux/amd64 + linux/arm64) | check after the 2.0.0 release |
+| Image is public and pulls anonymously | ✅ |
+| Image is multi-arch (linux/amd64 + linux/arm64) | ✅ |
 | Icon URL returns a real PNG | ✅ |
-| `TemplateURL` resolves to the raw XML | check after the rename |
+| `TemplateURL` resolves to the raw XML | ✅ |
 | Support URL is reachable | ✅ |
 
 ## The post to make
