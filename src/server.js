@@ -10,6 +10,8 @@ const proxy = require('./lib/proxy');
 const netinfo = require('./lib/netinfo');
 const { MdnsResponder } = require('./lib/mdns');
 const icons = require('./lib/icons');
+const docker = require('./lib/docker');
+const discovery = require('./lib/discovery');
 const { HealthMonitor, diagnoseHostReachability } = require('./lib/health');
 const { handleApi } = require('./routes/api');
 const {
@@ -63,13 +65,14 @@ function refresh() {
   const ip = netinfo.advertiseIp(current.settings);
   const names = mdnsNames(current);
 
-  if (current.settings.mdnsEnabled) {
-    if (!mdns.running && !mdns.socket) {
-      mdns.setRecords(names, ip);
-      mdns.start(netinfo.ipv4Interfaces().map((i) => i.address));
-    } else {
-      mdns.setRecords(names, ip);
-    }
+  // LOCALIZER_MDNS=off works out which names would be claimed without putting
+  // anything on the network. The test suite depends on it: its fixtures are
+  // named like real services, and announcing them would take those names over
+  // on whatever LAN the tests happen to run on.
+  const broadcast = current.settings.mdnsEnabled && process.env.LOCALIZER_MDNS !== 'off';
+  mdns.setRecords(names, ip);
+  if (broadcast) {
+    if (!mdns.running && !mdns.socket) mdns.start(netinfo.ipv4Interfaces().map((i) => i.address));
   } else if (mdns.socket) {
     mdns.stop();
   }
@@ -84,11 +87,33 @@ async function checkReachability() {
     lastReachability = await diagnoseHostReachability(config.load().services.filter((s) => s.enabled));
     if (lastReachability.blocked) {
       logger.warn('[network] None of the upstream services are reachable from this container.');
-      logger.warn('[network] On Unraid this usually means it is on br0 (ipvlan), which cannot');
+      logger.warn('[network] On Unraid this usually means it is on br0 (macvlan or ipvlan), which cannot');
       logger.warn('[network] reach its own host. Attach a second network once:');
-      logger.warn('[network]   docker network connect bridge unraid-reverse-proxy');
+      logger.warn('[network]   docker network connect bridge localizer');
     }
   } catch { /* diagnostic only */ }
+}
+
+/**
+ * Links existing tiles to their containers as soon as Docker is visible, so a
+ * tile renamed before anyone opens "Refresh from Unraid" is not later mistaken
+ * for a container that disappeared.
+ */
+async function linkContainers() {
+  try {
+    const scanned = await discovery.scan();
+    if (!scanned.available) {
+      logger.info(`[discovery] No Docker socket at ${scanned.socket}; map it in read-only to enable "Refresh from Unraid".`);
+      return;
+    }
+    const current = config.load();
+    const linked = discovery.persistBindings(current, scanned);
+    if (linked) config.save();
+    logger.info(`[discovery] Docker is visible: ${scanned.entries.length} containers`
+      + `${linked ? `, ${linked} tile(s) linked to their containers` : ''}.`);
+  } catch (err) {
+    logger.warn(`[discovery] ${err.message}`);
+  }
 }
 
 function systemInfo() {
@@ -102,6 +127,10 @@ function systemInfo() {
       enabled: current.settings.mdnsEnabled,
       running: mdns.running,
       names: mdns.names,
+    },
+    discovery: {
+      socket: docker.DEFAULT_SOCKET,
+      available: docker.available(),
     },
     suffixes: config.suffixes(current),
     // Names that will not resolve until a DNS record points them here.
@@ -152,7 +181,7 @@ background:#0f1420;color:#e6ebf5;font:15px/1.6 -apple-system,BlinkMacSystemFont,
 h1{margin:0 0 12px;font-size:21px}p{margin:0 0 14px;color:#9aa7bd}a{color:#4f8cff}
 code{background:#0f1420;border:1px solid #26304a;border-radius:6px;padding:2px 6px;color:#8fd0ff}</style>
 </head><body><div class="card"><h1>No service mapped to ${host}</h1>
-<p>This proxy is running, but nothing is configured for <code>${host}</code>.</p>
+<p>Localizer is running, but nothing is configured for <code>${host}</code>.</p>
 <p><a href="http://${admin}${port}/admin">Open the admin panel</a> to add it.</p>
 </div></body></html>`;
 }
@@ -276,7 +305,7 @@ server.on('error', (err) => {
 server.listen(httpPort, () => {
   const current = config.load();
   const ip = netinfo.advertiseIp(current.settings);
-  logger.info(`Unraid Reverse Proxy ${VERSION} listening on port ${httpPort}`);
+  logger.info(`Localizer ${VERSION} listening on port ${httpPort}`);
   logger.info(`Advertising ${config.adminFqdn(current)} -> ${ip}`);
   if (current.settings.mdnsEnabled && netinfo.looksLikeDockerBridge(ip)) {
     logger.warn('');
@@ -292,6 +321,7 @@ server.listen(httpPort, () => {
   }
   refresh();
   health.start();
+  setTimeout(linkContainers, 2500);
   setTimeout(checkReachability, 4000);
   setInterval(checkReachability, 300_000).unref();
 });

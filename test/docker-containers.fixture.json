@@ -1,0 +1,204 @@
+[
+  {
+    "Id": "5e1c0a9d7b3f5e1c0a9d7b3f5e1c0a9d7b3f5e1c0a9d7b3f5e1c0a9d7b3f5e1c",
+    "Names": ["/sonarr"],
+    "Image": "lscr.io/linuxserver/sonarr:latest",
+    "State": "running",
+    "Status": "Up 4 days",
+    "Ports": [
+      { "IP": "0.0.0.0", "PrivatePort": 8989, "PublicPort": 8989, "Type": "tcp" },
+      { "IP": "::", "PrivatePort": 8989, "PublicPort": 8989, "Type": "tcp" }
+    ],
+    "Labels": {
+      "net.unraid.docker.managed": "dockerman",
+      "net.unraid.docker.webui": "http://192.168.1.50:8989",
+      "net.unraid.docker.icon": "https://example.com/icons/sonarr.png"
+    },
+    "HostConfig": { "NetworkMode": "bridge" },
+    "NetworkSettings": { "Networks": { "bridge": { "IPAddress": "172.17.0.13" } } }
+  },
+  {
+    "Id": "f0e1d2c3b4a5f0e1d2c3b4a5f0e1d2c3b4a5f0e1d2c3b4a5f0e1d2c3b4a5f0e1",
+    "Names": ["/forgejo"],
+    "Image": "codeberg.org/forgejo/forgejo:9",
+    "State": "running",
+    "Status": "Up 4 days",
+    "Ports": [
+      { "IP": "0.0.0.0", "PrivatePort": 22, "PublicPort": 25, "Type": "tcp" },
+      { "IP": "0.0.0.0", "PrivatePort": 3000, "PublicPort": 4177, "Type": "tcp" }
+    ],
+    "Labels": {
+      "net.unraid.docker.managed": "dockerman",
+      "net.unraid.docker.webui": "http://[IP]:[PORT:3000]",
+      "net.unraid.docker.icon": "https://example.com/icons/forgejo.png"
+    },
+    "HostConfig": { "NetworkMode": "bridge" },
+    "NetworkSettings": { "Networks": { "bridge": { "IPAddress": "172.17.0.27" } } }
+  },
+  {
+    "Id": "b00cd0b00cd0b00cd0b00cd0b00cd0b00cd0b00cd0b00cd0b00cd0b00cd0b00c",
+    "Names": ["/book-downloader"],
+    "Image": "ghcr.io/example/book-downloader:latest",
+    "State": "running",
+    "Status": "Up 2 days",
+    "Ports": [
+      { "IP": "0.0.0.0", "PrivatePort": 8084, "PublicPort": 8184, "Type": "tcp" },
+      { "IP": "0.0.0.0", "PrivatePort": 8184, "PublicPort": 8384, "Type": "tcp" },
+      { "IP": "::", "PrivatePort": 8184, "PublicPort": 8384, "Type": "tcp" }
+    ],
+    "Labels": {
+      "net.unraid.docker.managed": "dockerman",
+      "net.unraid.docker.webui": "http://[IP]:[PORT:8184]/"
+    },
+    "HostConfig": { "NetworkMode": "bridge" },
+    "NetworkSettings": { "Networks": { "bridge": { "IPAddress": "172.17.0.34" } } }
+  },
+  {
+    "Id": "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c",
+    "Names": ["/ownCloud"],
+    "Image": "owncloud/server:latest",
+    "State": "running",
+    "Status": "Up 9 days",
+    "Ports": [
+      { "IP": "0.0.0.0", "PrivatePort": 443, "PublicPort": 7443, "Type": "tcp" }
+    ],
+    "Labels": {
+      "net.unraid.docker.managed": "dockerman",
+      "net.unraid.docker.webui": "https://[IP]:[PORT:7443]/",
+      "net.unraid.docker.icon": "https://example.com/icons/owncloud.png"
+    },
+    "HostConfig": { "NetworkMode": "bridge" },
+    "NetworkSettings": { "Networks": { "bridge": { "IPAddress": "172.17.0.31" } } }
+  },
+  {
+    "Id": "9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a",
+    "Names": ["/Plex-Media-Server"],
+    "Image": "plexinc/pms-docker:latest",
+    "State": "running",
+    "Status": "Up 9 days",
+    "Ports": [],
+    "Labels": {
+      "net.unraid.docker.managed": "dockerman",
+      "net.unraid.docker.webui": "http://[IP]:[PORT:32400]/web",
+      "net.unraid.docker.icon": "https://example.com/icons/plex.png"
+    },
+    "HostConfig": { "NetworkMode": "host" },
+    "NetworkSettings": { "Networks": { "host": { "IPAddress": "" } } }
+  },
+  {
+    "Id": "ad6ad6ad6ad6ad6ad6ad6ad6ad6ad6ad6ad6ad6ad6ad6ad6ad6ad6ad6ad6ad6a",
+    "Names": ["/AdGuard-Home"],
+    "Image": "adguard/adguardhome:latest",
+    "State": "running",
+    "Status": "Up 9 days",
+    "Ports": [],
+    "Labels": {
+      "net.unraid.docker.managed": "dockerman",
+      "net.unraid.docker.webui": "http://192.168.1.19:3004/"
+    },
+    "HostConfig": { "NetworkMode": "br0" },
+    "NetworkSettings": { "Networks": { "br0": { "IPAddress": "192.168.1.19" } } }
+  },
+  {
+    "Id": "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0",
+    "Names": ["/vpn"],
+    "Image": "qmcgaw/gluetun:latest",
+    "State": "running",
+    "Status": "Up 9 days",
+    "Ports": [
+      { "IP": "0.0.0.0", "PrivatePort": 8080, "PublicPort": 9099, "Type": "tcp" },
+      { "IP": "0.0.0.0", "PrivatePort": 51413, "PublicPort": 51413, "Type": "tcp" },
+      { "IP": "0.0.0.0", "PrivatePort": 51413, "PublicPort": 51413, "Type": "udp" }
+    ],
+    "Labels": { "net.unraid.docker.managed": "dockerman" },
+    "HostConfig": { "NetworkMode": "bridge" },
+    "NetworkSettings": { "Networks": { "bridge": { "IPAddress": "172.17.0.40" } } }
+  },
+  {
+    "Id": "7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c",
+    "Names": ["/torrent-client"],
+    "Image": "lscr.io/linuxserver/transmission:latest",
+    "State": "running",
+    "Status": "Up 9 days",
+    "Ports": [],
+    "Labels": {
+      "net.unraid.docker.managed": "dockerman",
+      "net.unraid.docker.webui": "http://[IP]:[PORT:8080]"
+    },
+    "HostConfig": { "NetworkMode": "container:a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0" },
+    "NetworkSettings": { "Networks": {} }
+  },
+  {
+    "Id": "3306330633063306330633063306330633063306330633063306330633063306",
+    "Names": ["/MySQL"],
+    "Image": "mysql:8",
+    "State": "running",
+    "Status": "Up 9 days",
+    "Ports": [
+      { "IP": "0.0.0.0", "PrivatePort": 3306, "PublicPort": 3306, "Type": "tcp" }
+    ],
+    "Labels": { "net.unraid.docker.managed": "dockerman" },
+    "HostConfig": { "NetworkMode": "bridge" },
+    "NetworkSettings": { "Networks": { "bridge": { "IPAddress": "172.17.0.5" } } }
+  },
+  {
+    "Id": "7a4d007a4d007a4d007a4d007a4d007a4d007a4d007a4d007a4d007a4d007a4d",
+    "Names": ["/tandoor"],
+    "Image": "vabene1111/recipes:latest",
+    "State": "running",
+    "Status": "Up 1 hour",
+    "Ports": [
+      { "PrivatePort": 80, "Type": "tcp" }
+    ],
+    "Labels": {
+      "net.unraid.docker.managed": "dockerman",
+      "net.unraid.docker.webui": "http://[IP]:[PORT:8080]"
+    },
+    "HostConfig": { "NetworkMode": "bridge" },
+    "NetworkSettings": { "Networks": { "bridge": { "IPAddress": "172.17.0.44" } } }
+  },
+  {
+    "Id": "ca11b3ca11b3ca11b3ca11b3ca11b3ca11b3ca11b3ca11b3ca11b3ca11b3ca11",
+    "Names": ["/calibre"],
+    "Image": "lscr.io/linuxserver/calibre-web:latest",
+    "State": "exited",
+    "Status": "Exited (0) 3 hours ago",
+    "Ports": [],
+    "Labels": {
+      "net.unraid.docker.managed": "dockerman",
+      "net.unraid.docker.webui": "http://[IP]:[PORT:8083]"
+    },
+    "HostConfig": { "NetworkMode": "bridge" },
+    "NetworkSettings": { "Networks": { "bridge": { "IPAddress": "" } } }
+  },
+  {
+    "Id": "5711e95711e95711e95711e95711e95711e95711e95711e95711e95711e95711",
+    "Names": ["/stirling"],
+    "Image": "stirlingtools/stirling-pdf:latest",
+    "State": "running",
+    "Status": "Up 5 days",
+    "Ports": [
+      { "IP": "0.0.0.0", "PrivatePort": 8080, "PublicPort": 8171, "Type": "tcp" }
+    ],
+    "Labels": {
+      "com.docker.compose.project": "app",
+      "net.unraid.docker.webui": "http://[IP]:[PORT:8080]"
+    },
+    "HostConfig": { "NetworkMode": "app_default" },
+    "NetworkSettings": { "Networks": { "app_default": { "IPAddress": "172.18.0.4" } } }
+  },
+  {
+    "Id": "10ca11e510ca11e510ca11e510ca11e510ca11e510ca11e510ca11e510ca11e5",
+    "Names": ["/localizer"],
+    "Image": "ghcr.io/nickhighland/localizer:latest",
+    "State": "running",
+    "Status": "Up 1 minute",
+    "Ports": [],
+    "Labels": {
+      "net.unraid.docker.managed": "dockerman",
+      "net.unraid.docker.webui": "http://[IP]:[PORT:80]/"
+    },
+    "HostConfig": { "NetworkMode": "br0" },
+    "NetworkSettings": { "Networks": { "br0": { "IPAddress": "192.168.1.20" }, "bridge": { "IPAddress": "172.17.0.50" } } }
+  }
+]

@@ -1,6 +1,9 @@
 import {
   api, el, initials, mountBrand, statusLabel, toast,
 } from './common.js';
+import { confirmDialog, promptDialog } from './dialogs.js';
+import { iconControl } from './icon-picker.js';
+import { openDiscovery } from './discovery-dialog.js';
 
 const state = {
   services: [],
@@ -13,6 +16,8 @@ const state = {
 const listEl = document.getElementById('serviceList');
 const emptyEl = document.getElementById('serviceEmpty');
 const modalRoot = document.getElementById('modalRoot');
+
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 // ---------- tabs ----------
 
@@ -55,6 +60,7 @@ function serviceRow(service, index) {
     'data-index': index,
     style: `--item-color:${service.color}`,
     draggable: 'true',
+    title: service.container ? `Linked to the ${service.container} container` : null,
   }, [
     el('span', { class: 'grip', text: '⠿', title: 'Drag to reorder' }),
     icon,
@@ -81,8 +87,14 @@ function renderServices() {
   if (!state.services.length) {
     emptyEl.appendChild(el('div', { class: 'empty' }, [
       el('h3', { text: 'Nothing mapped yet' }),
-      el('p', { text: 'Add your first container — for example Open WebUI at 192.168.254.254:8080 as openwebui.local.' }),
-      el('button', { class: 'btn btn-primary', type: 'button', onclick: () => openModal(null) }, ['+ Add service']),
+      el('p', {
+        text: 'Pull in the containers Unraid already runs, or add one by hand — '
+          + 'for example Open WebUI at 192.168.254.254:8080 as openwebui.local.',
+      }),
+      el('div', { class: 'empty-actions' }, [
+        el('button', { class: 'btn', type: 'button', onclick: openRefresh }, ['Find containers in Unraid']),
+        el('button', { class: 'btn btn-primary', type: 'button', onclick: () => openModal(null) }, ['+ Add service']),
+      ]),
     ]));
     return;
   }
@@ -141,6 +153,16 @@ function field(label, input, hint) {
   ]);
 }
 
+// Not a <label>: clicking anywhere in a label activates its first control, and
+// the icon control holds several buttons.
+function fieldGroup(label, control, hint) {
+  return el('div', { class: 'field' }, [
+    el('span', { class: 'label', text: label }),
+    control,
+    hint ? el('span', { class: 'hint', text: hint }) : null,
+  ]);
+}
+
 function toggle(id, title, description, checked) {
   return el('label', { class: 'switch' }, [
     el('input', { type: 'checkbox', id, ...(checked ? { checked: 'checked' } : {}) }),
@@ -154,7 +176,7 @@ function toggle(id, title, description, checked) {
 function openModal(service) {
   const isEdit = Boolean(service);
   const s = service || {
-    name: '', hostname: '', scheme: 'http', host: '', port: '', description: '',
+    name: '', hostname: '', scheme: 'http', host: '', port: '', description: '', category: '',
     icon: '', color: '#4f8cff', enabled: true, showOnDashboard: true,
     websockets: true, preserveHost: true, rewriteRedirects: true, insecureTls: false,
     forwardedHeaders: true,
@@ -177,11 +199,10 @@ function openModal(service) {
   const descInput = el('input', { class: 'input', id: 'f-desc', value: s.description, placeholder: 'Optional subtitle' });
   const categoryInput = el('input', {
     class: 'input', id: 'f-category', value: s.category || '', list: 'categoryOptions',
-    placeholder: 'e.g. Media, Downloads, Tools',
+    placeholder: 'e.g. Media, Downloads, Tools', maxlength: '40',
   });
   const categoryList = el('datalist', { id: 'categoryOptions' },
-    state.categories.map((c) => el('option', { value: c })));
-  const iconInput = el('input', { class: 'input', id: 'f-icon', value: s.icon, placeholder: 'https://…/icon.png' });
+    state.categories.map((c) => el('option', { value: c.name })));
   const colorInput = el('input', { type: 'color', id: 'f-color', value: s.color });
 
   // Typing "192.168.1.5:8080" into the address box should fill the port too.
@@ -193,73 +214,18 @@ function openModal(service) {
     }
   });
 
-  // --- icon control -------------------------------------------------------
-  const iconPreview = el('div', { class: 'icon-preview' });
-  const uploadInput = el('input', { type: 'file', accept: 'image/*', hidden: 'hidden' });
-
-  function paintPreview() {
-    const url = iconInput.value.trim();
-    iconPreview.replaceChildren(
-      url
-        ? el('img', { src: url, alt: '', onerror: () => { iconPreview.replaceChildren(el('span', { text: '!' })); } })
-        : el('span', { text: initials(nameInput.value || '?') }),
-    );
-    iconPreview.style.background = url ? 'transparent' : colorInput.value;
-  }
-
-  iconInput.addEventListener('input', paintPreview);
-  colorInput.addEventListener('input', paintPreview);
-  nameInput.addEventListener('input', () => { if (!iconInput.value.trim()) paintPreview(); });
-
-  const browseBtn = el('button', { class: 'btn btn-sm', type: 'button' }, ['Browse library']);
-  browseBtn.addEventListener('click', () => {
-    openIconPicker(async (picked) => {
-      iconInput.value = picked.icon;
+  const icon = iconControl({
+    value: s.icon,
+    getName: () => nameInput.value,
+    getColor: () => colorInput.value,
+    onPick: (picked) => {
       if (!nameInput.value.trim()) nameInput.value = picked.name;
-      paintPreview();
-      // Keep a local copy so the tile still renders if the source host goes away.
-      try {
-        const saved = await api('/api/icons/cache', { method: 'POST', body: { url: picked.icon } });
-        iconInput.value = saved.path;
-        paintPreview();
-      } catch {
-        /* offline or blocked — the remote URL still works */
-      }
-    });
+    },
   });
-
-  const uploadBtn = el('button', { class: 'btn btn-sm', type: 'button' }, ['Upload…']);
-  uploadBtn.addEventListener('click', () => uploadInput.click());
-  uploadInput.addEventListener('change', async () => {
-    const file = uploadInput.files[0];
-    if (!file) return;
-    uploadBtn.disabled = true;
-    uploadBtn.textContent = 'Uploading…';
-    try {
-      const res = await fetch('/api/icons/upload', {
-        method: 'POST',
-        headers: { 'content-type': file.type },
-        body: file,
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Upload failed.');
-      iconInput.value = data.path;
-      paintPreview();
-      toast('Icon uploaded', 'ok');
-    } catch (err) {
-      toast(err.message, 'error');
-    } finally {
-      uploadInput.value = '';
-      uploadBtn.disabled = false;
-      uploadBtn.textContent = 'Upload…';
-    }
+  colorInput.addEventListener('input', icon.repaint);
+  nameInput.addEventListener('input', () => {
+    if (!icon.value) icon.repaint();
   });
-
-  const iconControl = el('div', { class: 'icon-control' }, [
-    el('div', { class: 'icon-control-top' }, [iconPreview, browseBtn, uploadBtn, uploadInput]),
-    iconInput,
-  ]);
-  paintPreview();
 
   const errorBox = el('div', { class: 'notice error', hidden: 'hidden' });
   const testResult = el('span', { class: 'hint', style: 'margin:0' });
@@ -304,10 +270,10 @@ function openModal(service) {
     el('div', { style: 'display:flex;align-items:center;gap:12px;margin:-4px 0 16px' }, [testBtn, testResult]),
     el('div', { class: 'row' }, [
       field('Description', descInput),
-      field('Category', el('div', {}, [categoryInput, categoryList]), 'Groups tiles on the dashboard.'),
+      field('Category', el('div', {}, [categoryInput, categoryList]), 'Type a new name to create one.'),
     ]),
     el('div', { class: 'row' }, [
-      field('Icon', iconControl, 'Search the Unraid app library, upload your own, or paste a URL.'),
+      fieldGroup('Icon', icon.node, 'Search the Unraid app library, upload your own, or paste a URL.'),
       el('div', { style: 'flex:0 0 130px' }, [
         field('Colour', el('div', { class: 'color-row' }, [colorInput])),
       ]),
@@ -340,7 +306,7 @@ function openModal(service) {
       port: Number(portInput.value),
       description: descInput.value.trim(),
       category: categoryInput.value.trim(),
-      icon: iconInput.value.trim(),
+      icon: icon.value,
       color: colorInput.value,
       enabled: form.querySelector('#f-enabled').checked,
       showOnDashboard: form.querySelector('#f-dash').checked,
@@ -360,7 +326,8 @@ function openModal(service) {
         toast(`${payload.name} is now at ${payload.hostname}.${state.suffix}`, 'ok');
       }
       closeModal();
-      await loadServices();
+      // A category typed here may be new.
+      await Promise.all([loadServices(), loadCategories()]);
     } catch (err) {
       errorBox.textContent = err.message;
       errorBox.hidden = false;
@@ -378,8 +345,8 @@ function openModal(service) {
 }
 
 function escClose(event) {
-  // The icon picker sits above this modal and owns Escape while it is open.
-  if (event.key === 'Escape' && !document.querySelector('.picker-backdrop')) closeModal();
+  // Dialogs stacked above this form (the icon picker) own Escape while open.
+  if (event.key === 'Escape' && !document.querySelector('.dialog-backdrop')) closeModal();
 }
 
 function closeModal() {
@@ -388,17 +355,24 @@ function closeModal() {
 }
 
 async function removeService(service) {
-  if (!confirm(`Delete "${service.name}"? ${service.fqdn} will stop resolving.`)) return;
-  try {
-    await api(`/api/services/${service.id}`, { method: 'DELETE' });
-    toast(`Deleted ${service.name}`);
-    await loadServices();
-  } catch (err) {
-    toast(err.message, 'error');
-  }
+  const removed = await confirmDialog({
+    title: `Delete ${service.name}?`,
+    message: `${service.fqdn} will stop resolving. The container itself is not touched.`,
+    confirmText: 'Delete service',
+    danger: true,
+    onConfirm: () => api(`/api/services/${service.id}`, { method: 'DELETE' }),
+  });
+  if (!removed) return;
+  toast(`Deleted ${service.name}`);
+  await Promise.all([loadServices(), loadCategories()]);
+}
+
+function openRefresh() {
+  openDiscovery({ onApplied: () => Promise.all([loadServices(), loadCategories()]) });
 }
 
 document.getElementById('addService').addEventListener('click', () => openModal(null));
+document.getElementById('discoverBtn').addEventListener('click', openRefresh);
 
 // ---------- settings ----------
 
@@ -476,7 +450,7 @@ function renderSuffixes() {
 }
 
 function systemIp() {
-  return state.system?.advertiseIp || '<proxy IP>';
+  return state.system?.advertiseIp || '<Localizer IP>';
 }
 
 async function addSuffix() {
@@ -519,7 +493,6 @@ function fillSettings() {
   draftSuffixes = [...(state.settings.domainSuffixes || ['local'])];
   renderSuffixes();
   fillAppearance();
-  renderCategoryOrder();
 }
 
 document.getElementById('addSuffix').addEventListener('click', addSuffix);
@@ -594,15 +567,28 @@ document.getElementById('importFile').addEventListener('change', async (event) =
   const file = event.target.files[0];
   if (!file) return;
   event.target.value = '';
-  if (!confirm('Importing replaces every service currently configured. Continue?')) return;
+
+  let parsed;
   try {
-    const parsed = JSON.parse(await file.text());
-    const result = await api('/api/import', { method: 'POST', body: parsed });
-    toast(`Imported ${result.count} service(s)`, 'ok');
-    await Promise.all([loadServices(), loadSettings()]);
-  } catch (err) {
-    toast(err.message, 'error');
+    parsed = JSON.parse(await file.text());
+  } catch {
+    toast('That file is not valid JSON.', 'error');
+    return;
   }
+  const incoming = Array.isArray(parsed.services) ? parsed.services.length : 0;
+
+  const confirmed = await confirmDialog({
+    title: 'Replace every service?',
+    message: `Importing replaces the ${plural(state.services.length, 'service')} configured now `
+      + `with the ${plural(incoming, 'service')} in this backup.`,
+    confirmText: 'Import',
+    danger: true,
+    onConfirm: async () => {
+      const result = await api('/api/import', { method: 'POST', body: parsed });
+      toast(`Imported ${plural(result.count, 'service')}`, 'ok');
+    },
+  });
+  if (confirmed) await Promise.all([loadServices(), loadSettings(), loadCategories()]);
 });
 
 // ---------- appearance ----------
@@ -610,8 +596,6 @@ document.getElementById('importFile').addEventListener('change', async (event) =
 const ACCENTS = ['#4f8cff', '#7c5cff', '#22c1a4', '#f0883e', '#e06c75', '#c678dd', '#e5c07b', '#56b6c2'];
 const AP_SELECTS = ['theme', 'layout', 'density', 'background'];
 const AP_FLAGS = ['groupByCategory', 'showStatus', 'showHostnames', 'showDescriptions'];
-
-let categoryDraft = [];
 
 function fillAppearance() {
   const a = state.settings.appearance || {};
@@ -644,67 +628,6 @@ function renderSwatches() {
   }));
 }
 
-/** Drag-ordered list of the categories currently in use. */
-function renderCategoryOrder() {
-  const wrap = document.getElementById('categoryOrder');
-  if (!wrap) return;
-  const stored = state.settings.categoryOrder || [];
-  const used = state.categories;
-  categoryDraft = [...stored.filter((c) => used.includes(c)),
-    ...used.filter((c) => !stored.includes(c))];
-
-  wrap.replaceChildren();
-  if (!categoryDraft.length) {
-    wrap.appendChild(el('p', { class: 'hint', text: 'No categories yet — set one on a service to create it.' }));
-    return;
-  }
-
-  categoryDraft.forEach((name, index) => {
-    const count = state.services.filter((s) => s.category === name).length;
-    const row = el('div', {
-      class: 'item cat-row', draggable: 'true', 'data-index': String(index),
-    }, [
-      el('span', { class: 'grip', text: '⠿' }),
-      el('div', { class: 'item-main' }, [
-        el('div', { class: 'item-title' }, [el('strong', { text: name })]),
-        el('div', { class: 'item-route', text: `${count} service${count === 1 ? '' : 's'}` }),
-      ]),
-    ]);
-    attachCategoryDrag(row);
-    wrap.appendChild(row);
-  });
-}
-
-let catDragIndex = null;
-
-function attachCategoryDrag(row) {
-  row.addEventListener('dragstart', () => {
-    catDragIndex = Number(row.dataset.index);
-    row.classList.add('dragging');
-  });
-  row.addEventListener('dragend', () => {
-    catDragIndex = null;
-    row.classList.remove('dragging');
-    for (const r of row.parentElement.children) r.classList.remove('drop-target');
-  });
-  row.addEventListener('dragover', (event) => {
-    if (catDragIndex === null) return;
-    event.preventDefault();
-    row.classList.add('drop-target');
-  });
-  row.addEventListener('dragleave', () => row.classList.remove('drop-target'));
-  row.addEventListener('drop', (event) => {
-    event.preventDefault();
-    row.classList.remove('drop-target');
-    const to = Number(row.dataset.index);
-    if (catDragIndex === null || catDragIndex === to) return;
-    const [moved] = categoryDraft.splice(catDragIndex, 1);
-    categoryDraft.splice(to, 0, moved);
-    state.settings.categoryOrder = categoryDraft;
-    renderCategoryOrder();
-  });
-}
-
 async function saveAppearance(event) {
   const button = event.currentTarget;
   button.disabled = true;
@@ -715,7 +638,7 @@ async function saveAppearance(event) {
 
     const result = await api('/api/settings', {
       method: 'PUT',
-      body: { ...state.settings, appearance, categoryOrder: categoryDraft },
+      body: { ...state.settings, appearance },
     });
     state.settings = result.settings;
     toast('Appearance saved', 'ok');
@@ -726,8 +649,150 @@ async function saveAppearance(event) {
   }
 }
 
-document.getElementById('saveAppearance')?.addEventListener('click', saveAppearance);
-document.getElementById('ap-accent')?.addEventListener('input', renderSwatches);
+document.getElementById('saveAppearance').addEventListener('click', saveAppearance);
+document.getElementById('ap-accent').addEventListener('input', renderSwatches);
+
+// ---------- categories ----------
+// Every change here is saved as it happens: renames and deletes touch services,
+// so they cannot wait for a Save button.
+
+function renderCategories() {
+  const wrap = document.getElementById('categoryList');
+  wrap.replaceChildren();
+
+  if (!state.categories.length) {
+    wrap.appendChild(el('p', { class: 'hint', text: 'No categories yet. Add one below, or type one on a service.' }));
+    return;
+  }
+
+  state.categories.forEach((category, index) => {
+    const renameBtn = el('button', { class: 'btn btn-sm', type: 'button' }, ['Rename']);
+    renameBtn.addEventListener('click', () => renameCategory(category.name));
+    const deleteBtn = el('button', { class: 'btn btn-sm btn-danger', type: 'button' }, ['Delete']);
+    deleteBtn.addEventListener('click', () => deleteCategory(category));
+
+    const row = el('div', { class: 'item cat-row', draggable: 'true', 'data-index': String(index) }, [
+      el('span', { class: 'grip', text: '⠿', title: 'Drag to reorder' }),
+      el('div', { class: 'item-main' }, [
+        el('div', { class: 'item-title' }, [el('strong', { text: category.name })]),
+        el('div', { class: 'item-route', text: category.count ? plural(category.count, 'service') : 'Empty' }),
+      ]),
+      el('div', { class: 'item-actions' }, [renameBtn, deleteBtn]),
+    ]);
+    attachCategoryDrag(row);
+    wrap.appendChild(row);
+  });
+}
+
+let catDragIndex = null;
+
+function attachCategoryDrag(row) {
+  row.addEventListener('dragstart', (event) => {
+    catDragIndex = Number(row.dataset.index);
+    row.classList.add('dragging');
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', String(catDragIndex));
+  });
+  row.addEventListener('dragend', () => {
+    catDragIndex = null;
+    row.classList.remove('dragging');
+    for (const r of row.parentElement?.children || []) r.classList.remove('drop-target');
+  });
+  row.addEventListener('dragover', (event) => {
+    if (catDragIndex === null) return;
+    event.preventDefault();
+    row.classList.add('drop-target');
+  });
+  row.addEventListener('dragleave', () => row.classList.remove('drop-target'));
+  row.addEventListener('drop', async (event) => {
+    event.preventDefault();
+    row.classList.remove('drop-target');
+    const to = Number(row.dataset.index);
+    if (catDragIndex === null || catDragIndex === to) return;
+    const [moved] = state.categories.splice(catDragIndex, 1);
+    state.categories.splice(to, 0, moved);
+    renderCategories();
+    try {
+      const result = await api('/api/categories/order', {
+        method: 'POST',
+        body: { order: state.categories.map((c) => c.name) },
+      });
+      state.categories = result.categories;
+      renderCategories();
+    } catch (err) {
+      toast(err.message, 'error');
+      loadCategories();
+    }
+  });
+}
+
+async function addCategoryFromInput() {
+  const input = document.getElementById('categoryInput');
+  const notice = document.getElementById('categoryNotice');
+  const name = input.value.trim();
+  if (!name) {
+    input.focus();
+    return;
+  }
+  try {
+    const result = await api('/api/categories', { method: 'POST', body: { name } });
+    state.categories = result.categories;
+    input.value = '';
+    notice.hidden = true;
+    renderCategories();
+    toast(`Created ${result.name}`, 'ok');
+  } catch (err) {
+    notice.textContent = err.message;
+    notice.className = 'notice error';
+    notice.hidden = false;
+  }
+}
+
+async function renameCategory(name) {
+  const next = await promptDialog({
+    title: 'Rename category',
+    label: 'Category name',
+    value: name,
+    confirmText: 'Rename',
+    maxLength: 40,
+    onSubmit: async (value) => {
+      if (value === name) return;
+      const result = await api('/api/categories/rename', { method: 'POST', body: { from: name, to: value } });
+      state.categories = result.categories;
+    },
+  });
+  if (!next || next === name) return;
+  renderCategories();
+  await loadServices();
+  toast(`Renamed to ${next}`, 'ok');
+}
+
+async function deleteCategory(category) {
+  const confirmed = await confirmDialog({
+    title: `Delete “${category.name}”?`,
+    message: category.count
+      ? `Its ${plural(category.count, 'service')} move to Ungrouped. No service is removed.`
+      : 'There is nothing in it.',
+    confirmText: 'Delete category',
+    danger: true,
+    onConfirm: async () => {
+      const result = await api('/api/categories/delete', { method: 'POST', body: { name: category.name } });
+      state.categories = result.categories;
+    },
+  });
+  if (!confirmed) return;
+  renderCategories();
+  await loadServices();
+  toast(`Deleted ${category.name}`);
+}
+
+document.getElementById('addCategory').addEventListener('click', addCategoryFromInput);
+document.getElementById('categoryInput').addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    addCategoryFromInput();
+  }
+});
 
 // ---------- system ----------
 
@@ -754,6 +819,7 @@ async function loadSystem() {
       metaCard('Auto-detected IP', info.detectedIp),
       metaCard('Listening port', info.httpPort),
       metaCard('mDNS responder', info.mdns.enabled ? (info.mdns.running ? 'running' : 'stopped') : 'disabled'),
+      metaCard('Docker discovery', info.discovery?.available ? 'connected' : `no socket at ${info.discovery?.socket}`),
       metaCard('Interfaces', info.interfaces.map((i) => `${i.name} ${i.address}`).join(', ') || 'none'),
       metaCard('Config file', info.configFile),
       metaCard('Version', `${info.version} · node ${info.node}`),
@@ -764,9 +830,15 @@ async function loadSystem() {
     if (!info.mdns.names.length) {
       names.appendChild(el('p', { class: 'hint', text: 'No names are being advertised.' }));
     }
+    if (info.mdns.names.length && !info.mdns.running) {
+      names.appendChild(el('p', {
+        class: 'hint',
+        text: 'The mDNS responder is not running, so these names are not being announced.',
+      }));
+    }
     for (const name of info.mdns.names) {
       names.appendChild(el('div', { class: 'item' }, [
-        el('span', { class: 'dot up' }),
+        el('span', { class: `dot ${info.mdns.running ? 'up' : 'unknown'}` }),
         el('div', { class: 'item-main' }, [
           el('div', { class: 'item-route', text: `${name}  →  ${info.advertiseIp}` }),
         ]),
@@ -776,7 +848,7 @@ async function loadSystem() {
     const hint = document.getElementById('advertiseHint');
     hint.textContent = `The address clients are told to connect to. Auto-detected: ${info.detectedIp}.`;
 
-    // The suffix rows quote the proxy's IP in their DNS records, and the system
+    // The suffix rows quote Localizer's IP in their DNS records, and the system
     // info usually lands after they first render.
     if (document.getElementById('suffixList').children.length) renderSuffixes();
 
@@ -810,11 +882,14 @@ document.getElementById('logout').addEventListener('click', async () => {
 async function loadServices() {
   const data = await api('/api/services');
   state.services = data.services || [];
-  state.categories = [...new Set(state.services.map((x) => x.category).filter(Boolean))]
-    .sort((a, b) => a.localeCompare(b));
   renderServices();
-  if (document.getElementById('categoryOrder')) renderCategoryOrder();
-  document.getElementById('foot').textContent = `${state.services.length} service(s) configured`;
+  document.getElementById('foot').textContent = `${plural(state.services.length, 'service')} configured`;
+}
+
+async function loadCategories() {
+  const data = await api('/api/categories');
+  state.categories = data.categories || [];
+  renderCategories();
 }
 
 async function loadSettings() {
@@ -831,6 +906,15 @@ async function loadSettings() {
   fillSettings();
 }
 
+/** "All settings" on the dashboard's quick editor lands here as #service-<id>. */
+function openFromHash() {
+  const match = location.hash.match(/^#service-([A-Za-z0-9]+)$/);
+  if (!match) return;
+  history.replaceState(null, '', location.pathname);
+  const service = state.services.find((s) => s.id === match[1]);
+  if (service) openModal(service);
+}
+
 async function init() {
   try {
     const session = await api('/api/session');
@@ -838,117 +922,19 @@ async function init() {
       location.href = '/login?next=/admin';
       return;
     }
-    mountBrand(document.getElementById('brand'), 'Reverse Proxy', `Signed in as ${session.username}`);
-    await Promise.all([loadSettings(), loadServices()]);
+    mountBrand(document.getElementById('brand'), 'Localizer', `Signed in as ${session.username}`);
+    await Promise.all([loadSettings(), loadServices(), loadCategories()]);
+    openFromHash();
     loadSystem();
-    setInterval(() => loadServices().catch(() => {}), 30_000);
+    setInterval(() => {
+      // Never rebuild the list under an open form, dialog or drag.
+      if (modalRoot.children.length || dragId || document.querySelector('.dialog-backdrop')) return;
+      loadServices().catch(() => {});
+    }, 30_000);
   } catch (err) {
     if (err.status === 401) location.href = '/login?next=/admin';
     else toast(err.message, 'error');
   }
-}
-
-
-// ---------- icon picker ----------
-
-let pickerDebounce = null;
-
-function openIconPicker(onPick) {
-  const searchInput = el('input', {
-    class: 'input', type: 'search', placeholder: 'Search 3,700+ Unraid app icons…', autocomplete: 'off',
-  });
-  const results = el('div', { class: 'icon-grid' });
-  const statusLine = el('p', { class: 'hint', style: 'margin:10px 0 0' });
-
-  async function run(query) {
-    statusLine.textContent = 'Searching…';
-    try {
-      const data = await api(`/api/icons?q=${encodeURIComponent(query)}&limit=60`);
-      results.replaceChildren();
-      if (!data.results.length) {
-        statusLine.textContent = query ? `No icons match “${query}”.` : 'No icons available.';
-        return;
-      }
-      for (const item of data.results) {
-        const cell = el('button', {
-          class: 'icon-cell', type: 'button', title: `${item.name}${item.repo ? ` — ${item.repo}` : ''}`,
-        }, [
-          el('img', {
-            src: item.icon,
-            alt: '',
-            loading: 'lazy',
-            onerror: (event) => { event.target.closest('.icon-cell')?.remove(); },
-          }),
-          el('span', { class: 'icon-cell-name', text: item.name }),
-          el('span', { class: 'icon-cell-repo', text: item.repo || '' }),
-        ]);
-        cell.addEventListener('click', () => {
-          onPick(item);
-          closePicker();
-        });
-        results.appendChild(cell);
-      }
-      const age = data.fetchedAt ? new Date(data.fetchedAt).toLocaleDateString() : 'unknown';
-      statusLine.textContent = `${data.total} match${data.total === 1 ? '' : 'es'} · app list updated ${age}`;
-    } catch (err) {
-      results.replaceChildren();
-      statusLine.textContent = err.message;
-    }
-  }
-
-  searchInput.addEventListener('input', () => {
-    clearTimeout(pickerDebounce);
-    pickerDebounce = setTimeout(() => run(searchInput.value.trim()), 180);
-  });
-
-  const refreshBtn = el('button', { class: 'btn btn-sm', type: 'button' }, ['Refresh list']);
-  refreshBtn.addEventListener('click', async () => {
-    refreshBtn.disabled = true;
-    refreshBtn.textContent = 'Refreshing…';
-    try {
-      const data = await api('/api/icons/refresh', { method: 'POST' });
-      toast(`Loaded ${data.count} app icons`, 'ok');
-      await run(searchInput.value.trim());
-    } catch (err) {
-      toast(err.message, 'error');
-    } finally {
-      refreshBtn.disabled = false;
-      refreshBtn.textContent = 'Refresh list';
-    }
-  });
-
-  const panel = el('div', { class: 'modal icon-picker' }, [
-    el('h2', { text: 'Choose an icon' }),
-    el('p', { class: 'sub', text: 'Icons come from the Unraid Community Applications catalogue.' }),
-    el('div', { style: 'display:flex;gap:10px;align-items:center' }, [searchInput, refreshBtn]),
-    results,
-    statusLine,
-    el('div', { class: 'modal-actions' }, [
-      el('div', { class: 'spacer' }),
-      el('button', { class: 'btn', type: 'button', onclick: () => closePicker() }, ['Cancel']),
-    ]),
-  ]);
-
-  const backdrop = el('div', { class: 'modal-backdrop picker-backdrop' }, [panel]);
-  backdrop.addEventListener('mousedown', (event) => {
-    if (event.target === backdrop) closePicker();
-  });
-
-  function closePicker() {
-    backdrop.remove();
-    document.removeEventListener('keydown', onKey);
-  }
-  function onKey(event) {
-    if (event.key === 'Escape') {
-      event.stopImmediatePropagation();
-      closePicker();
-    }
-  }
-  document.addEventListener('keydown', onKey);
-
-  document.body.appendChild(backdrop);
-  searchInput.focus();
-  run('');
 }
 
 init();

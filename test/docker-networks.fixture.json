@@ -1,0 +1,7 @@
+[
+  { "Name": "bridge", "Driver": "bridge", "IPAM": { "Config": [ { "Subnet": "172.17.0.0/16", "Gateway": "172.17.0.1" } ] } },
+  { "Name": "host", "Driver": "host", "IPAM": { "Config": [] } },
+  { "Name": "none", "Driver": "null", "IPAM": { "Config": [] } },
+  { "Name": "br0", "Driver": "macvlan", "IPAM": { "Config": [ { "Subnet": "192.168.1.0/24", "Gateway": "192.168.1.1" } ] } },
+  { "Name": "app_default", "Driver": "bridge", "IPAM": { "Config": [ { "Subnet": "172.18.0.0/16", "Gateway": "172.18.0.1" } ] } }
+]

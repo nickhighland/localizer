@@ -138,7 +138,7 @@ async function fetchFeed() {
     try {
       const res = await fetch(url, {
         signal: controller.signal,
-        headers: { accept: 'application/json', 'user-agent': 'unraid-reverse-proxy' },
+        headers: { accept: 'application/json', 'user-agent': 'localizer' },
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const declared = Number(res.headers.get('content-length') || 0);
@@ -297,7 +297,7 @@ async function cacheRemoteIcon(rawUrl) {
   try {
     const res = await fetch(url, {
       signal: controller.signal,
-      headers: { 'user-agent': 'unraid-reverse-proxy' },
+      headers: { 'user-agent': 'localizer' },
     });
     if (!res.ok) throw Object.assign(new Error(`Icon download failed (HTTP ${res.status}).`), { status: 502 });
 

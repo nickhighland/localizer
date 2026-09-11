@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const categoryLib = require('./categories');
 
 const CONFIG_DIR = process.env.CONFIG_DIR || '/config';
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
@@ -15,11 +16,11 @@ function defaults() {
     settings: {
       httpPort: Number(process.env.HTTP_PORT) || 80,
       domainSuffixes: ['local'],
-      adminHostname: 'proxy',
+      adminHostname: 'localizer',
       advertiseIp: 'auto',
       mdnsEnabled: true,
       dashboardRequiresLogin: false,
-      dashboardTitle: 'Unraid Services',
+      dashboardTitle: 'Localizer',
       dashboardSort: 'manual',
       categoryOrder: [],
       appearance: {
@@ -113,6 +114,9 @@ function normalizeService(s) {
     category: String(s.category || '').trim().slice(0, 40),
     icon: String(s.icon || '').trim(),
     color: /^#[0-9a-fA-F]{6}$/.test(s.color || '') ? s.color : pickColor(s.name || s.hostname || ''),
+    // The Docker container this tile stands for, once known. It is what keeps
+    // a tile linked to its container after the tile is renamed.
+    container: String(s.container || '').trim().slice(0, 128),
     enabled: s.enabled !== false,
     showOnDashboard: s.showOnDashboard !== false,
     preserveHost: s.preserveHost !== false,
@@ -146,15 +150,14 @@ function validateService(input, existingId = null) {
   if (!name) return { ok: false, error: 'Name is required.' };
   if (name.length > 60) return { ok: false, error: 'Name must be 60 characters or fewer.' };
 
-  // Accept "openwebui", "openwebui.local", or "OpenWebUI." — store just the label.
   // Accept "openwebui", "openwebui.local", "openwebui.home" — store just the label.
-  let hostname = stripSuffix(String(input.hostname || '').trim(), cfg).replace(/\.$/, '');
+  const hostname = stripSuffix(String(input.hostname || '').trim(), cfg).replace(/\.$/, '');
   if (!hostname) return { ok: false, error: 'Hostname is required.' };
   if (!HOSTNAME_RE.test(hostname)) {
     return { ok: false, error: 'Hostname may only contain letters, numbers and hyphens, and cannot start or end with a hyphen.' };
   }
   if (hostname === cfg.settings.adminHostname) {
-    return { ok: false, error: `"${hostname}" is reserved for this proxy's own admin interface.` };
+    return { ok: false, error: `"${hostname}" is reserved for Localizer's own admin panel.` };
   }
   const clash = cfg.services.find((s) => s.hostname === hostname && s.id !== existingId);
   if (clash) return { ok: false, error: `Hostname "${hostname}.${suffix}" is already used by "${clash.name}".` };
@@ -229,15 +232,9 @@ function hasKnownSuffix(host, cfg = load()) {
   return suffixes(cfg).some((suffix) => clean.endsWith(`.${suffix}`));
 }
 
-/**
- * Categories in display order: the explicitly ordered ones first, then any
- * others alphabetically, so a newly typed category still appears.
- */
+/** Categories in display order, including ones nothing has been filed under yet. */
 function categories(cfg = load()) {
-  const used = new Set(cfg.services.map((s) => s.category).filter(Boolean));
-  const ordered = (cfg.settings.categoryOrder || []).filter((c) => used.has(c));
-  const rest = [...used].filter((c) => !ordered.includes(c)).sort((a, b) => a.localeCompare(b));
-  return [...ordered, ...rest];
+  return categoryLib.list(cfg);
 }
 
 function publicUrl(service, cfg = load()) {

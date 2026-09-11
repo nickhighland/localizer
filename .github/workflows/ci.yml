@@ -22,10 +22,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build the image
-        run: docker build -t unraid-reverse-proxy:ci .
+        run: docker build -t localizer:ci .
       - name: Boot it and check it answers
         run: |
-          docker run -d --name ci -p 8080:80 -e HTTP_PORT=80 unraid-reverse-proxy:ci
+          docker run -d --name ci -p 8080:80 -e HTTP_PORT=80 localizer:ci
           for i in $(seq 1 20); do
             if curl -fsS http://127.0.0.1:8080/healthz > /dev/null; then
               echo "healthy after ${i}s"

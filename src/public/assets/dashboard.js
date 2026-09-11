@@ -1,12 +1,17 @@
 import {
-  api, el, initials, mountBrand, statusLabel, toast, SEARCH_SVG,
+  api, el, initials, mountBrand, statusLabel, toast, SEARCH_SVG, PENCIL_SVG, TRASH_SVG,
 } from './common.js';
+import { openDialog, promptDialog, confirmDialog } from './dialogs.js';
+import { iconControl } from './icon-picker.js';
+import { openDiscovery } from './discovery-dialog.js';
 
 const content = document.getElementById('content');
 const search = document.getElementById('search');
 const foot = document.getElementById('foot');
 const newTabToggle = document.getElementById('newTabToggle');
 const sortSelect = document.getElementById('sortSelect');
+const addCategoryBtn = document.getElementById('addCategoryBtn');
+const discoverBtn = document.getElementById('discoverBtn');
 
 document.getElementById('searchIcon').outerHTML = SEARCH_SVG;
 
@@ -18,10 +23,38 @@ const state = {
   canEdit: false,
 };
 
-const UNCATEGORISED = 'Ungrouped';
+const UNGROUPED = 'Ungrouped';
+const NEW_CATEGORY = '__new_category__';
+const key = (name) => String(name || '').trim().toLowerCase();
 
-let openInNewTab = localStorage.getItem('urp:newTab') !== 'false';
-const collapsed = new Set(JSON.parse(localStorage.getItem('urp:collapsed') || '[]'));
+// ---------- per-browser preferences ----------
+// Storage can be unavailable (private windows, blocked site data); none of this
+// is essential, so every access is guarded.
+
+function readPref(name) {
+  try {
+    return localStorage.getItem(name);
+  } catch {
+    return null;
+  }
+}
+
+function writePref(name, value) {
+  try {
+    localStorage.setItem(name, value);
+  } catch { /* not essential */ }
+}
+
+let openInNewTab = readPref('urp:newTab') !== 'false';
+const collapsed = new Set((() => {
+  try {
+    return JSON.parse(readPref('urp:collapsed') || '[]');
+  } catch {
+    return [];
+  }
+})());
+
+const saveCollapsed = () => writePref('urp:collapsed', JSON.stringify([...collapsed]));
 
 function syncToggle() {
   newTabToggle.textContent = openInNewTab ? '↗ New tab' : '→ Same tab';
@@ -32,7 +65,7 @@ function syncToggle() {
 
 newTabToggle.addEventListener('click', () => {
   openInNewTab = !openInNewTab;
-  localStorage.setItem('urp:newTab', String(openInNewTab));
+  writePref('urp:newTab', String(openInNewTab));
   syncToggle();
   render();
 });
@@ -58,6 +91,8 @@ function applyAppearance() {
 
 function tile(service) {
   const a = state.appearance || {};
+  const draggable = state.canEdit && state.sort === 'manual';
+
   const icon = service.icon
     ? el('div', { class: 'tile-icon' }, [el('img', { src: service.icon, alt: '', loading: 'lazy' })])
     : el('div', { class: 'tile-icon', text: initials(service.name) });
@@ -72,14 +107,14 @@ function tile(service) {
     body.push(el('div', { class: 'tile-desc', text: service.description }));
   }
 
-  const node = el('a', {
+  const link = el('a', {
     class: 'tile',
     href: service.url,
     style: `--tile-color:${service.color}`,
     target: openInNewTab ? '_blank' : null,
     rel: openInNewTab ? 'noopener' : null,
     'data-id': service.id,
-    draggable: state.canEdit && state.sort === 'manual' ? 'true' : null,
+    draggable: draggable ? 'true' : null,
     title: statusLabel(service.status),
   }, [
     icon,
@@ -87,8 +122,21 @@ function tile(service) {
     a.showStatus !== false ? el('span', { class: `dot ${status} tile-status` }) : null,
   ]);
 
-  if (state.canEdit && state.sort === 'manual') attachDrag(node, service);
-  return node;
+  if (draggable) attachDrag(link, service);
+  if (!state.canEdit) return el('div', { class: 'tile-wrap' }, [link]);
+
+  // A sibling of the link, not a child: a button inside <a> is invalid HTML,
+  // and a click on it would follow the link instead of opening the editor.
+  const edit = el('button', {
+    class: 'tile-edit',
+    type: 'button',
+    title: `Edit ${service.name}`,
+    'aria-label': `Edit ${service.name}`,
+    html: PENCIL_SVG,
+  });
+  edit.addEventListener('click', () => openQuickEdit(service));
+
+  return el('div', { class: 'tile-wrap editable' }, [link, edit]);
 }
 
 // ---------- drag to arrange ----------
@@ -108,10 +156,13 @@ function attachDrag(node, service) {
     event.dataTransfer.effectAllowed = 'move';
     // Without this an <a> drag offers its href, which browsers prefer.
     event.dataTransfer.setData('text/plain', service.id);
+    // Deferred: changing the page during dragstart can cancel the drag.
+    setTimeout(() => document.body.classList.add('is-dragging'), 0);
   });
   node.addEventListener('dragend', () => {
     dragging = null;
     node.classList.remove('dragging');
+    document.body.classList.remove('is-dragging');
     clearDropHints();
   });
   node.addEventListener('dragover', (event) => {
@@ -134,14 +185,16 @@ function attachDrag(node, service) {
   });
 }
 
-/** A whole group is a drop target too, so empty groups still accept tiles. */
+/** A whole group is a drop target too, so an empty group still accepts tiles. */
 function attachGroupDrop(node, category) {
   node.addEventListener('dragover', (event) => {
     if (!dragging) return;
     event.preventDefault();
     node.classList.add('group-drop');
   });
-  node.addEventListener('dragleave', () => node.classList.remove('group-drop'));
+  node.addEventListener('dragleave', (event) => {
+    if (!node.contains(event.relatedTarget)) node.classList.remove('group-drop');
+  });
   node.addEventListener('drop', (event) => {
     event.preventDefault();
     clearDropHints();
@@ -160,7 +213,7 @@ async function moveService(moved, category, anchorId, after) {
     index = at < 0 ? list.length : (after ? at + 1 : at);
   } else {
     // Dropped on a group rather than a tile: append to that group.
-    const last = list.map((s) => s.category || '').lastIndexOf(category);
+    const last = list.map((s) => key(s.category)).lastIndexOf(key(category));
     index = last < 0 ? list.length : last + 1;
   }
   list.splice(index, 0, moved);
@@ -181,6 +234,162 @@ async function moveService(moved, category, anchorId, after) {
   }
 }
 
+// ---------- categories ----------
+
+async function addCategory() {
+  const name = await promptDialog({
+    title: 'New category',
+    message: 'Create an empty group, then drag tiles into it.',
+    label: 'Category name',
+    placeholder: 'e.g. Media',
+    confirmText: 'Create',
+    maxLength: 40,
+    onSubmit: (value) => api('/api/categories', { method: 'POST', body: { name: value } }),
+  });
+  if (!name) return;
+  await load();
+  toast(`Created ${name}`, 'ok');
+}
+
+async function renameCategory(name) {
+  const next = await promptDialog({
+    title: 'Rename category',
+    label: 'Category name',
+    value: name,
+    confirmText: 'Rename',
+    maxLength: 40,
+    onSubmit: async (value) => {
+      if (value === name) return;
+      await api('/api/categories/rename', { method: 'POST', body: { from: name, to: value } });
+    },
+  });
+  if (next === null || next === name) return;
+  if (collapsed.delete(name)) {
+    collapsed.add(next);
+    saveCollapsed();
+  }
+  await load();
+  toast(`Renamed to ${next}`, 'ok');
+}
+
+async function deleteCategory(name, count) {
+  const confirmed = await confirmDialog({
+    title: `Delete “${name}”?`,
+    message: count
+      ? `Its ${count} tile${count === 1 ? '' : 's'} move to Ungrouped. No service is removed.`
+      : 'There is nothing in it.',
+    confirmText: 'Delete category',
+    danger: true,
+    onConfirm: () => api('/api/categories/delete', { method: 'POST', body: { name } }),
+  });
+  if (!confirmed) return;
+  if (collapsed.delete(name)) saveCollapsed();
+  await load();
+  toast(`Deleted ${name}`);
+}
+
+// ---------- quick edit ----------
+
+function field(label, control) {
+  return el('label', { class: 'field' }, [el('span', { class: 'label', text: label }), control]);
+}
+
+// Not a <label>: clicking anywhere in a label activates its first control, and
+// the icon control holds several buttons.
+function fieldGroup(label, control) {
+  return el('div', { class: 'field' }, [el('span', { class: 'label', text: label }), control]);
+}
+
+function openQuickEdit(service) {
+  const nameInput = el('input', {
+    class: 'input', value: service.name, maxlength: '60', autocomplete: 'off',
+  });
+  const icon = iconControl({
+    value: service.icon,
+    getName: () => nameInput.value,
+    getColor: () => service.color,
+  });
+  nameInput.addEventListener('input', () => {
+    if (!icon.value) icon.repaint();
+  });
+
+  const categorySelect = el('select', { class: 'select' });
+  let lastCategory = '';
+
+  function fillCategories(selected) {
+    categorySelect.replaceChildren(
+      el('option', { value: '', text: UNGROUPED }),
+      ...state.categories.map((name) => el('option', { value: name, text: name })),
+      el('option', { value: NEW_CATEGORY, text: '＋ New category…' }),
+    );
+    categorySelect.value = state.categories.find((name) => key(name) === key(selected)) || '';
+    lastCategory = categorySelect.value;
+  }
+  fillCategories(service.category);
+
+  categorySelect.addEventListener('change', async () => {
+    if (categorySelect.value !== NEW_CATEGORY) {
+      lastCategory = categorySelect.value;
+      return;
+    }
+    const created = await promptDialog({
+      title: 'New category',
+      label: 'Category name',
+      placeholder: 'e.g. Media',
+      confirmText: 'Create',
+      maxLength: 40,
+      onSubmit: async (value) => {
+        const result = await api('/api/categories', { method: 'POST', body: { name: value } });
+        state.categories = result.categories.map((c) => c.name);
+      },
+    });
+    fillCategories(created || lastCategory);
+  });
+
+  const error = el('div', { class: 'notice error', role: 'alert', hidden: 'hidden' });
+  const cancel = el('button', { class: 'btn', type: 'button' }, ['Cancel']);
+  const save = el('button', { class: 'btn btn-primary', type: 'submit' }, ['Save']);
+  const more = el('a', { class: 'btn btn-ghost', href: `/admin#service-${service.id}` }, ['All settings']);
+
+  const dialog = openDialog({
+    title: `Edit ${service.name}`,
+    sub: service.fqdn,
+    form: true,
+    className: 'quick-edit',
+    body: [error, field('Name', nameInput), fieldGroup('Icon', icon.node), field('Category', categorySelect)],
+    actions: [more, el('div', { class: 'spacer' }), cancel, save],
+  });
+  cancel.addEventListener('click', () => dialog.close());
+
+  dialog.panel.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const name = nameInput.value.replace(/\s+/g, ' ').trim();
+    if (!name) {
+      error.textContent = 'Name cannot be empty.';
+      error.hidden = false;
+      nameInput.focus();
+      return;
+    }
+    save.disabled = true;
+    try {
+      await api(`/api/services/${service.id}`, {
+        method: 'PUT',
+        body: { name, icon: icon.value, category: lastCategory },
+      });
+      dialog.close();
+      await load();
+      toast(`Saved ${name}`, 'ok');
+    } catch (err) {
+      error.textContent = err.message;
+      error.hidden = false;
+      save.disabled = false;
+    }
+  });
+
+  nameInput.focus();
+  nameInput.select();
+}
+
 // ---------- grouping & sorting ----------
 
 function sorted(list) {
@@ -194,35 +403,87 @@ function sorted(list) {
   return copy;
 }
 
-function groupHeading(label, count, key) {
-  const isCollapsed = collapsed.has(key);
-  const head = el('button', {
-    class: `group-head${isCollapsed ? ' collapsed' : ''}`,
+function groupHeading(category, count) {
+  const label = category || UNGROUPED;
+  const storeKey = category || UNGROUPED;
+  const isCollapsed = collapsed.has(storeKey);
+
+  const toggle = el('button', {
+    class: 'group-toggle',
     type: 'button',
     'aria-expanded': String(!isCollapsed),
   }, [
-    el('span', { class: 'group-caret', text: '▾' }),
+    el('span', { class: 'group-caret', text: '▾', 'aria-hidden': 'true' }),
     el('span', { class: 'group-name', text: label }),
     el('span', { class: 'group-count', text: String(count) }),
   ]);
-  head.addEventListener('click', () => {
-    if (collapsed.has(key)) collapsed.delete(key); else collapsed.add(key);
-    localStorage.setItem('urp:collapsed', JSON.stringify([...collapsed]));
+  toggle.addEventListener('click', () => {
+    if (collapsed.has(storeKey)) collapsed.delete(storeKey);
+    else collapsed.add(storeKey);
+    saveCollapsed();
     render();
   });
-  return head;
+
+  const parts = [toggle, el('span', { class: 'group-rule', 'aria-hidden': 'true' })];
+
+  if (state.canEdit && category) {
+    const renameBtn = el('button', {
+      class: 'icon-btn', type: 'button', title: `Rename ${category}`, 'aria-label': `Rename ${category}`, html: PENCIL_SVG,
+    });
+    renameBtn.addEventListener('click', () => renameCategory(category));
+    const deleteBtn = el('button', {
+      class: 'icon-btn danger', type: 'button', title: `Delete ${category}`, 'aria-label': `Delete ${category}`, html: TRASH_SVG,
+    });
+    deleteBtn.addEventListener('click', () => deleteCategory(category, count));
+    parts.push(el('span', { class: 'group-actions' }, [renameBtn, deleteBtn]));
+  }
+
+  return el('div', { class: `group-head${isCollapsed ? ' collapsed' : ''}` }, parts);
+}
+
+function groupSection(category, list, { slot = false } = {}) {
+  const editing = state.canEdit && state.sort === 'manual';
+  const storeKey = category || UNGROUPED;
+  const section = el('section', { class: `group${slot ? ' group-slot' : ''}` });
+  section.appendChild(groupHeading(category, list.length));
+
+  if (slot || !collapsed.has(storeKey)) {
+    if (list.length) {
+      const grid = el('div', { class: 'grid' });
+      for (const s of list) grid.appendChild(tile(s));
+      section.appendChild(grid);
+    } else {
+      let hint = 'Empty';
+      if (slot) hint = 'Drop a tile here to take it out of its category';
+      else if (editing) hint = 'Empty — drag tiles here';
+      section.appendChild(el('div', { class: 'group-empty', text: hint }));
+    }
+  }
+
+  if (editing) attachGroupDrop(section, category);
+  return section;
+}
+
+function emptyState() {
+  const actions = [el('a', { class: 'btn btn-primary', href: '/admin' }, ['Open the admin panel'])];
+  if (state.canEdit) {
+    const scan = el('button', { class: 'btn', type: 'button' }, ['Find containers in Unraid']);
+    scan.addEventListener('click', () => openDiscovery({ onApplied: load }));
+    actions.unshift(scan);
+  }
+  return el('div', { class: 'empty' }, [
+    el('h3', { text: 'No services yet' }),
+    el('p', { text: 'Map your first container to a .local address and it will show up here.' }),
+    el('div', { class: 'empty-actions' }, actions),
+  ]);
 }
 
 function render() {
   const term = search.value.trim().toLowerCase();
   content.replaceChildren();
 
-  if (!state.services.length) {
-    content.appendChild(el('div', { class: 'empty' }, [
-      el('h3', { text: 'No services yet' }),
-      el('p', { text: 'Map your first container to a .local address and it will show up here.' }),
-      el('a', { class: 'btn btn-primary', href: '/admin' }, ['Open the admin panel']),
-    ]));
+  if (!state.services.length && !state.categories.length) {
+    content.appendChild(emptyState());
     return;
   }
 
@@ -231,7 +492,7 @@ function render() {
       .toLowerCase().includes(term))
     : state.services;
 
-  if (!matches.length) {
+  if (term && !matches.length) {
     content.appendChild(el('div', { class: 'empty' }, [
       el('h3', { text: 'Nothing matches' }),
       el('p', { text: `No service matches “${search.value.trim()}”.` }),
@@ -240,32 +501,32 @@ function render() {
   }
 
   // Searching flattens the view — groups get in the way of finding one thing.
-  const grouping = state.appearance.groupByCategory !== false && !term;
+  // With no categories at all, a lone "Ungrouped" heading would be noise.
+  const grouping = state.appearance.groupByCategory !== false && !term && state.categories.length > 0;
   if (!grouping) {
+    if (!matches.length) {
+      content.appendChild(emptyState());
+      return;
+    }
     const grid = el('div', { class: 'grid' });
     for (const s of sorted(matches)) grid.appendChild(tile(s));
     content.appendChild(grid);
     return;
   }
 
-  const hasLoose = matches.some((s) => !s.category);
-  const order = [...state.categories, ...(hasLoose ? [''] : [])];
+  for (const category of state.categories) {
+    const inGroup = sorted(matches.filter((s) => key(s.category) === key(category)));
+    if (!inGroup.length && !state.canEdit) continue;
+    content.appendChild(groupSection(category, inGroup));
+  }
 
-  for (const category of order) {
-    const inGroup = sorted(matches.filter((s) => (s.category || '') === category));
-    if (!inGroup.length) continue;
-    const key = category || UNCATEGORISED;
-
-    const section = el('section', { class: 'group' });
-    section.appendChild(groupHeading(category || UNCATEGORISED, inGroup.length, key));
-
-    if (!collapsed.has(key)) {
-      const grid = el('div', { class: 'grid' });
-      for (const s of inGroup) grid.appendChild(tile(s));
-      section.appendChild(grid);
-    }
-    if (state.canEdit && state.sort === 'manual') attachGroupDrop(section, category);
-    content.appendChild(section);
+  const known = new Set(state.categories.map(key));
+  const loose = sorted(matches.filter((s) => !known.has(key(s.category))));
+  if (loose.length) {
+    content.appendChild(groupSection('', loose));
+  } else if (state.canEdit && state.sort === 'manual') {
+    // Only shown mid-drag, so a tile can be dropped out of its category.
+    content.appendChild(groupSection('', [], { slot: true }));
   }
 }
 
@@ -279,15 +540,16 @@ async function load() {
   state.sort = data.sort || 'manual';
   state.canEdit = Boolean(data.canEdit);
 
-  document.title = data.title || 'Services';
-  mountBrand(
-    document.getElementById('brand'),
-    data.title || 'Services',
-    state.canEdit ? 'Drag tiles to arrange them' : 'Reverse proxy',
-  );
+  const title = data.title || 'Localizer';
+  document.title = title;
+  let subtitle = title === 'Localizer' ? 'Your services' : 'Localizer';
+  if (state.canEdit) subtitle = 'Drag tiles to arrange them · pencil to edit';
+  mountBrand(document.getElementById('brand'), title, subtitle);
 
   sortSelect.value = state.sort;
   sortSelect.hidden = false;
+  addCategoryBtn.hidden = !state.canEdit;
+  discoverBtn.hidden = !state.canEdit;
 
   applyAppearance();
   render();
@@ -311,6 +573,9 @@ sortSelect.addEventListener('change', async () => {
   }
 });
 
+addCategoryBtn.addEventListener('click', addCategory);
+discoverBtn.addEventListener('click', () => openDiscovery({ onApplied: load }));
+
 async function refreshStatus() {
   try {
     const { status } = await api('/api/status');
@@ -321,7 +586,8 @@ async function refreshStatus() {
       service.status = next;
       if ((next ? next.up : null) !== before) changed = true;
     }
-    if (changed) render();
+    // Never re-render under an open dialog or an active drag.
+    if (changed && !dragging && !document.querySelector('.dialog-backdrop')) render();
   } catch {
     /* transient; the next tick will retry */
   }
@@ -341,11 +607,11 @@ search.addEventListener('keydown', (event) => {
 });
 
 document.addEventListener('keydown', (event) => {
-  if (event.key === '/' && document.activeElement !== search) {
-    event.preventDefault();
-    search.focus();
-    search.select();
-  }
+  if (event.key !== '/' || document.activeElement === search) return;
+  if (event.target.closest && event.target.closest('input, textarea, select, [contenteditable]')) return;
+  event.preventDefault();
+  search.focus();
+  search.select();
 });
 
 async function init() {
@@ -355,7 +621,7 @@ async function init() {
     if (!session.authenticated) {
       const link = document.getElementById('adminLink');
       link.textContent = 'Sign in';
-      link.href = '/login?next=/admin';
+      link.href = '/login?next=/';
     }
   } catch { /* the dashboard still renders */ }
 

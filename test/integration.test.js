@@ -17,6 +17,11 @@ let server;
 let upstream;
 let configDir;
 let cookie = '';
+let dockerApi;
+let dockerSocket;
+let dockerContainers;
+// Every connection the stand-in servers accept, so teardown can end them all.
+const openSockets = new Set();
 
 function request(pathname, { method = 'GET', headers = {}, body } = {}) {
   return new Promise((resolve, reject) => {
@@ -47,6 +52,30 @@ function request(pathname, { method = 'GET', headers = {}, body } = {}) {
 test.before(async () => {
   configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'urp-int-'));
 
+  // A stand-in for the Docker Engine API on a unix socket, serving a synthetic
+  // inventory that individual tests change between scans.
+  dockerContainers = JSON.parse(fs.readFileSync(path.join(__dirname, 'docker-containers.fixture.json'), 'utf8'));
+  const dockerNetworks = JSON.parse(fs.readFileSync(path.join(__dirname, 'docker-networks.fixture.json'), 'utf8'));
+  // Unix socket paths are capped near 104 bytes, and a temp directory can be
+  // longer than that on its own, so the socket gets a short path of its own.
+  dockerSocket = path.join(fs.mkdtempSync('/tmp/loc-'), 'd.sock');
+  dockerApi = http.createServer((req, res) => {
+    let body = null;
+    if (req.url.startsWith('/containers/json')) body = dockerContainers;
+    else if (req.url.startsWith('/networks')) body = dockerNetworks;
+    res.writeHead(body ? 200 : 404, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(body || { message: 'page not found' }));
+  });
+  dockerApi.on('connection', (socket) => {
+    openSockets.add(socket);
+    socket.on('close', () => openSockets.delete(socket));
+  });
+  // Without an error handler a failed listen() leaves this hook waiting forever.
+  await new Promise((resolve, reject) => {
+    dockerApi.once('error', reject);
+    dockerApi.listen(dockerSocket, resolve);
+  });
+
   upstream = http.createServer((req, res) => {
     if (req.url === '/redirect') {
       res.writeHead(302, { location: `http://127.0.0.1:${UPSTREAM_PORT}/after` });
@@ -65,6 +94,10 @@ test.before(async () => {
   upstream.on('upgrade', (req, socket) => {
     socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\nWS-OK');
   });
+  upstream.on('connection', (socket) => {
+    openSockets.add(socket);
+    socket.on('close', () => openSockets.delete(socket));
+  });
   await new Promise((r) => upstream.listen(UPSTREAM_PORT, '127.0.0.1', r));
 
   server = spawn(process.execPath, [path.join(__dirname, '..', 'src', 'server.js')], {
@@ -72,6 +105,9 @@ test.before(async () => {
       ...process.env,
       CONFIG_DIR: configDir,
       HTTP_PORT: String(PROXY_PORT),
+      DOCKER_SOCKET: dockerSocket,
+      HOST_ADDRESS: '',
+      LOCALIZER_MDNS: 'off',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -89,8 +125,27 @@ test.before(async () => {
 });
 
 test.after(async () => {
-  if (server) server.kill('SIGTERM');
+  // If teardown ever stalls again, say what is holding the process open.
+  const stuck = setTimeout(() => {
+    const handles = process._getActiveHandles().map((h) => h.constructor.name);
+    console.error(`teardown stalled; open handles: ${handles.join(', ')}`);
+  }, 8000);
+  stuck.unref();
+
+  if (server && server.exitCode === null && server.signalCode === null) {
+    const exited = new Promise((resolve) => server.once('exit', resolve));
+    server.kill('SIGTERM');
+    const force = setTimeout(() => server.kill('SIGKILL'), 5000);
+    await exited;
+    clearTimeout(force);
+  }
+  // An HTTP server keeps upgraded sockets half-open, and close() waits on them
+  // indefinitely; end everything the stand-ins accepted before closing.
+  for (const socket of openSockets) socket.destroy();
   if (upstream) await new Promise((r) => upstream.close(r));
+  if (dockerApi) await new Promise((r) => dockerApi.close(r));
+  clearTimeout(stuck);
+  if (dockerSocket) fs.rmSync(path.dirname(dockerSocket), { recursive: true, force: true });
   if (configDir) fs.rmSync(configDir, { recursive: true, force: true });
 });
 
@@ -289,7 +344,7 @@ test('a service answers on every configured suffix', async () => {
 });
 
 test('the admin panel is reachable on every suffix too', async () => {
-  for (const host of ['proxy.local', 'proxy.home.arpa', 'proxy.lan']) {
+  for (const host of ['localizer.local', 'localizer.home.arpa', 'localizer.lan']) {
     const res = await request('/healthz', { headers: { host } });
     assert.equal(res.status, 200, `${host} should reach the admin app`);
   }
@@ -433,17 +488,6 @@ test('invalid appearance values are rejected, not silently coerced', async () =>
   assert.equal(after.json.settings.appearance.theme, before.json.settings.appearance.theme);
 });
 
-test('category order is stored and pruned to real categories', async () => {
-  const before = await request('/api/settings');
-  await request('/api/settings', {
-    method: 'PUT',
-    body: { ...before.json.settings, categoryOrder: ['Downloads', 'Media', 'Ghost'] },
-  });
-  const dash = await request('/api/dashboard');
-  // "Ghost" matches no service, so it must not appear in the rendered order.
-  assert.ok(!dash.json.categories.includes('Ghost'));
-  assert.equal(dash.json.categories[0], 'Downloads', 'stored order leads');
-});
 
 test('the /order route is not shadowed by the /:id route', async () => {
   // "order" is alphanumeric, so a /api/services/:id matcher placed first will
@@ -462,4 +506,153 @@ test('reordering actually persists across a re-read', async () => {
 
   const after = await request('/api/services');
   assert.deepEqual(after.json.services.map((s) => s.id), reversed);
+});
+
+// --- categories as first-class objects -------------------------------------
+
+test('categories can be created empty, renamed and deleted', async () => {
+  let res = await request('/api/categories', { method: 'POST', body: { name: 'Ghost' } });
+  assert.equal(res.status, 201);
+
+  const dash = await request('/api/dashboard');
+  assert.ok(dash.json.categories.includes('Ghost'), 'an empty category stays visible to editors');
+
+  res = await request('/api/categories', { method: 'POST', body: { name: 'ghost' } });
+  assert.equal(res.status, 400, 'duplicates are refused whatever the case');
+
+  res = await request('/api/categories/rename', { method: 'POST', body: { from: 'Ghost', to: 'Spirits' } });
+  assert.equal(res.status, 200);
+  res = await request('/api/categories/delete', { method: 'POST', body: { name: 'Spirits' } });
+  assert.equal(res.status, 200);
+
+  const after = await request('/api/categories');
+  assert.ok(!after.json.categories.some((c) => ['Ghost', 'Spirits'].includes(c.name)));
+});
+
+test('renaming a category refiles its services', async () => {
+  const service = (await request('/api/services')).json.services[0];
+  await request(`/api/services/${service.id}`, { method: 'PUT', body: { category: 'Books' } });
+  await request('/api/categories/rename', { method: 'POST', body: { from: 'Books', to: 'Reading' } });
+  const after = (await request('/api/services')).json.services;
+  assert.equal(after.find((s) => s.id === service.id).category, 'Reading');
+});
+
+test('deleting a category keeps its services, ungrouped', async () => {
+  const count = (await request('/api/services')).json.services.length;
+  const res = await request('/api/categories/delete', { method: 'POST', body: { name: 'Reading' } });
+  assert.equal(res.json.moved, 1);
+  const after = (await request('/api/services')).json.services;
+  assert.equal(after.length, count, 'no service was removed');
+  assert.ok(after.every((s) => s.category !== 'Reading'));
+});
+
+test('a category typed on a service reuses the stored spelling', async () => {
+  await request('/api/categories', { method: 'POST', body: { name: 'Media Library' } });
+  const service = (await request('/api/services')).json.services[0];
+  const res = await request(`/api/services/${service.id}`, { method: 'PUT', body: { category: 'media   library' } });
+  assert.equal(res.json.service.category, 'Media Library');
+});
+
+test('saving settings from a stale form cannot undo a category made elsewhere', async () => {
+  const stale = await request('/api/settings');
+  await request('/api/categories', { method: 'POST', body: { name: 'Made Elsewhere' } });
+  await request('/api/settings', { method: 'PUT', body: { ...stale.json.settings } });
+  const cats = (await request('/api/categories')).json.categories;
+  assert.ok(cats.some((c) => c.name === 'Made Elsewhere'));
+});
+
+test('category order is set explicitly and ignores unknown names', async () => {
+  const names = (await request('/api/categories')).json.categories.map((c) => c.name);
+  const wanted = [...names].reverse();
+  const res = await request('/api/categories/order', { method: 'POST', body: { order: ['Nope', ...wanted] } });
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.json.categories.map((c) => c.name), wanted);
+});
+
+test('anonymous viewers do not see empty categories', async () => {
+  const saved = cookie;
+  cookie = '';
+  const res = await request('/api/dashboard');
+  cookie = saved;
+  const filled = new Set(res.json.services.map((s) => s.category).filter(Boolean));
+  for (const name of res.json.categories) {
+    assert.ok(filled.has(name), `anonymous view listed the empty category "${name}"`);
+  }
+});
+
+// --- container discovery ---------------------------------------------------
+
+test('discovery requires a session', async () => {
+  const saved = cookie;
+  cookie = '';
+  const scan = await request('/api/discovery');
+  const apply = await request('/api/discovery/apply', { method: 'POST', body: { add: ['sonarr'] } });
+  cookie = saved;
+  assert.equal(scan.status, 401);
+  assert.equal(apply.status, 401);
+});
+
+test('discovery reports the containers Docker has that Localizer does not', async () => {
+  const res = await request('/api/discovery');
+  assert.equal(res.status, 200);
+  assert.equal(res.json.available, true);
+  const sonarr = res.json.added.find((a) => a.container === 'sonarr');
+  assert.deepEqual([sonarr.host, sonarr.port], ['172.17.0.1', 8989]);
+  assert.ok(res.json.skipped.some((s) => s.container === 'MySQL'));
+  assert.equal(res.json.suffix, 'local');
+});
+
+test('applying discovery adds only what was ticked, into the chosen category', async () => {
+  const res = await request('/api/discovery/apply', {
+    method: 'POST', body: { add: ['sonarr', 'forgejo'], category: 'Imported' },
+  });
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.json.added.sort(), ['forgejo', 'sonarr']);
+
+  const services = (await request('/api/services')).json.services;
+  const sonarr = services.find((s) => s.container === 'sonarr');
+  assert.equal(sonarr.category, 'Imported');
+  assert.equal(sonarr.port, 8989);
+  assert.ok(!services.some((s) => s.container === 'stirling'), 'unticked containers were not added');
+
+  const again = await request('/api/discovery');
+  assert.ok(!again.json.added.some((a) => a.container === 'sonarr'), 'no longer offered');
+});
+
+test('renaming a discovered tile does not make its container look new or gone', async () => {
+  const sonarr = (await request('/api/services')).json.services.find((s) => s.container === 'sonarr');
+  await request(`/api/services/${sonarr.id}`, { method: 'PUT', body: { name: 'TV Shows' } });
+
+  const res = await request('/api/discovery');
+  assert.ok(!res.json.added.some((a) => a.container === 'sonarr'));
+  assert.ok(!res.json.removed.some((r) => r.id === sonarr.id));
+});
+
+test('a container deleted in Docker is offered for removal, and removed only on request', async () => {
+  const forgejo = (await request('/api/services')).json.services.find((s) => s.container === 'forgejo');
+  dockerContainers = dockerContainers.filter((c) => c.Names[0] !== '/forgejo');
+
+  const res = await request('/api/discovery');
+  assert.ok(res.json.removed.some((r) => r.id === forgejo.id));
+
+  await request('/api/discovery/apply', { method: 'POST', body: {} });
+  assert.ok((await request('/api/services')).json.services.some((s) => s.id === forgejo.id),
+    'nothing ticked, nothing removed');
+
+  await request('/api/discovery/apply', { method: 'POST', body: { remove: [forgejo.id] } });
+  assert.ok(!(await request('/api/services')).json.services.some((s) => s.id === forgejo.id));
+});
+
+test('a moved port is offered, and applied only when ticked', async () => {
+  const container = dockerContainers.find((c) => c.Names[0] === '/sonarr');
+  container.Ports = [{ IP: '0.0.0.0', PrivatePort: 8989, PublicPort: 18989, Type: 'tcp' }];
+  container.Labels['net.unraid.docker.webui'] = 'http://[IP]:[PORT:8989]';
+
+  const res = await request('/api/discovery');
+  const change = res.json.changed.find((c) => c.container === 'sonarr');
+  assert.equal(change.to.port, 18989);
+
+  await request('/api/discovery/apply', { method: 'POST', body: { update: [change.id] } });
+  const sonarr = (await request('/api/services')).json.services.find((s) => s.container === 'sonarr');
+  assert.equal(sonarr.port, 18989);
 });

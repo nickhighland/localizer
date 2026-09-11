@@ -5,13 +5,19 @@ const auth = require('../lib/auth');
 const { probe } = require('../lib/health');
 const icons = require('../lib/icons');
 const suffixLib = require('../lib/suffixes');
+const categories = require('../lib/categories');
+const discovery = require('../lib/discovery');
 const { sendJson, readJson, readBody } = require('../lib/http-util');
 
+// categoryOrder is deliberately absent. Categories change only through their own
+// endpoints, so a settings form holding a stale copy cannot quietly undo a
+// category created from the dashboard in another tab.
 const SETTING_KEYS = [
-  'domainSuffixes', 'adminHostname', 'advertiseIp', 'mdnsEnabled', 'appearance',
-  'dashboardSort', 'categoryOrder',
+  'domainSuffixes', 'adminHostname', 'advertiseIp', 'mdnsEnabled', 'appearance', 'dashboardSort',
   'dashboardRequiresLogin', 'dashboardTitle', 'healthCheckSeconds', 'httpPort',
 ];
+
+const DEFAULT_TITLE = 'Localizer';
 
 function serviceForAdmin(service, cfg, health) {
   return {
@@ -41,6 +47,15 @@ function serviceForPublic(service, cfg, health) {
   };
 }
 
+async function scanDocker(res) {
+  try {
+    return await discovery.scan();
+  } catch (err) {
+    sendJson(res, err.status || 502, { error: err.message });
+    return null;
+  }
+}
+
 async function handleApi(req, res, ctx) {
   const { url, health, authenticated } = ctx;
   const pathname = url.pathname;
@@ -62,11 +77,18 @@ async function handleApi(req, res, ctx) {
     const visible = authenticated
       ? cfg.services
       : cfg.services.filter((s) => s.enabled && s.showOnDashboard);
+    // Editors see empty categories so they can fill them; visitors only see
+    // groups that have something in them.
+    const allCategories = config.categories(cfg);
+    const shownCategories = authenticated
+      ? allCategories
+      : allCategories.filter((name) => visible.some((s) => categories.key(s.category) === categories.key(name)));
+
     return sendJson(res, 200, {
       title: cfg.settings.dashboardTitle,
       appearance: cfg.settings.appearance,
       sort: cfg.settings.dashboardSort,
-      categories: config.categories(cfg),
+      categories: shownCategories,
       canEdit: authenticated,
       services: visible.map((s) => (authenticated
         ? serviceForAdmin(s, cfg, health)
@@ -154,6 +176,11 @@ async function handleApi(req, res, ctx) {
     const body = await readJson(req);
     const result = config.validateService(body);
     if (!result.ok) return sendJson(res, 400, { error: result.error });
+    // Validation first: resolving a category may create it, and a rejected
+    // service should not leave a new category behind.
+    const category = categories.resolve(cfg, body.category);
+    if (!category.ok) return sendJson(res, 400, { error: category.error });
+    result.service.category = category.name;
     cfg.services.push(result.service);
     config.save();
     ctx.refresh();
@@ -166,14 +193,25 @@ async function handleApi(req, res, ctx) {
     if (requireAuth()) return undefined;
     const body = await readJson(req);
     const ids = Array.isArray(body.ids) ? body.ids : [];
+
     // Dragging a tile into another group both reorders and recategorises.
-    if (body.categories && typeof body.categories === 'object') {
-      for (const service of cfg.services) {
-        if (Object.prototype.hasOwnProperty.call(body.categories, service.id)) {
-          service.category = String(body.categories[service.id] || '').trim().slice(0, 40);
-        }
+    // Every new name is checked before anything is touched.
+    const moves = body.categories && typeof body.categories === 'object'
+      ? Object.entries(body.categories) : [];
+    for (const [, raw] of moves) {
+      const trimmed = String(raw ?? '').trim();
+      if (trimmed && !categories.find(cfg, trimmed)) {
+        const check = categories.clean(trimmed);
+        if (!check.ok) return sendJson(res, 400, { error: check.error });
       }
     }
+    for (const [id, raw] of moves) {
+      const service = cfg.services.find((s) => s.id === id);
+      if (!service) continue;
+      const resolved = categories.resolve(cfg, raw);
+      if (resolved.ok) service.category = resolved.name;
+    }
+
     const byId = new Map(cfg.services.map((s) => [s.id, s]));
     const reordered = ids.map((id) => byId.get(id)).filter(Boolean);
     for (const s of cfg.services) if (!ids.includes(s.id)) reordered.push(s);
@@ -200,12 +238,88 @@ async function handleApi(req, res, ctx) {
       const merged = { ...cfg.services[index], ...body, id };
       const result = config.validateService(merged, id);
       if (!result.ok) return sendJson(res, 400, { error: result.error });
+      if ('category' in body) {
+        const category = categories.resolve(cfg, body.category);
+        if (!category.ok) return sendJson(res, 400, { error: category.error });
+        result.service.category = category.name;
+      }
       cfg.services[index] = result.service;
       config.save();
       ctx.refresh();
       return sendJson(res, 200, { service: serviceForAdmin(result.service, cfg, health) });
     }
     return sendJson(res, 405, { error: 'Method not allowed.' });
+  }
+
+  // --- categories ------------------------------------------------------
+  // POSTs with JSON bodies throughout: names can hold spaces and slashes, and
+  // keeping them out of the path means no escaping and no route to shadow.
+  if (pathname === '/api/categories' && method === 'GET') {
+    if (requireAuth()) return undefined;
+    return sendJson(res, 200, { categories: categories.withCounts(cfg) });
+  }
+
+  if (pathname === '/api/categories' && method === 'POST') {
+    if (requireAuth()) return undefined;
+    const body = await readJson(req);
+    const result = categories.add(cfg, body.name);
+    if (!result.ok) return sendJson(res, 400, { error: result.error });
+    config.save();
+    return sendJson(res, 201, { name: result.name, categories: categories.withCounts(cfg) });
+  }
+
+  if (pathname === '/api/categories/rename' && method === 'POST') {
+    if (requireAuth()) return undefined;
+    const body = await readJson(req);
+    const result = categories.rename(cfg, body.from, body.to);
+    if (!result.ok) return sendJson(res, 400, { error: result.error });
+    config.save();
+    return sendJson(res, 200, {
+      name: result.name, previous: result.previous, moved: result.moved, categories: categories.withCounts(cfg),
+    });
+  }
+
+  if (pathname === '/api/categories/delete' && method === 'POST') {
+    if (requireAuth()) return undefined;
+    const body = await readJson(req);
+    const result = categories.remove(cfg, body.name);
+    if (!result.ok) return sendJson(res, 400, { error: result.error });
+    config.save();
+    return sendJson(res, 200, { name: result.name, moved: result.moved, categories: categories.withCounts(cfg) });
+  }
+
+  if (pathname === '/api/categories/order' && method === 'POST') {
+    if (requireAuth()) return undefined;
+    const body = await readJson(req);
+    const result = categories.reorder(cfg, body.order);
+    if (!result.ok) return sendJson(res, 400, { error: result.error });
+    config.save();
+    return sendJson(res, 200, { categories: categories.withCounts(cfg) });
+  }
+
+  // --- container discovery ---------------------------------------------
+  if (pathname === '/api/discovery' && method === 'GET') {
+    if (requireAuth()) return undefined;
+    const scanned = await scanDocker(res);
+    if (!scanned) return undefined;
+    if (!scanned.available) return sendJson(res, 200, { available: false, socket: scanned.socket });
+    return sendJson(res, 200, { ...discovery.plan(cfg, scanned), suffix: config.primarySuffix(cfg) });
+  }
+
+  if (pathname === '/api/discovery/apply' && method === 'POST') {
+    if (requireAuth()) return undefined;
+    const body = await readJson(req);
+    // Rescanned rather than trusting what the browser saw: Docker may have
+    // changed while the review dialog was open.
+    const scanned = await scanDocker(res);
+    if (!scanned) return undefined;
+    if (!scanned.available) {
+      return sendJson(res, 409, { error: 'Localizer cannot reach Docker, so there is nothing to apply.' });
+    }
+    const result = discovery.apply(cfg, scanned, body);
+    config.save();
+    ctx.refresh();
+    return sendJson(res, 200, result);
   }
 
   // --- status & diagnostics -------------------------------------------
@@ -309,7 +423,7 @@ async function handleApi(req, res, ctx) {
     if (!suffixResult.ok) return sendJson(res, 400, { error: suffixResult.error });
     next.domainSuffixes = suffixResult.suffixes;
     delete next.domainSuffix;
-    next.adminHostname = String(next.adminHostname || 'proxy').trim().toLowerCase();
+    next.adminHostname = String(next.adminHostname || 'localizer').trim().toLowerCase();
     if (!config.HOSTNAME_RE.test(next.adminHostname)) {
       return sendJson(res, 400, { error: 'Admin hostname must be a valid DNS label.' });
     }
@@ -323,7 +437,8 @@ async function handleApi(req, res, ctx) {
     next.advertiseIp = advertise || 'auto';
     next.mdnsEnabled = next.mdnsEnabled !== false;
     next.dashboardRequiresLogin = next.dashboardRequiresLogin === true;
-    next.dashboardTitle = String(next.dashboardTitle || 'Unraid Services').trim().slice(0, 60) || 'Unraid Services';
+    next.dashboardTitle = String(next.dashboardTitle || DEFAULT_TITLE).trim().slice(0, 60) || DEFAULT_TITLE;
+
     const ALLOWED = {
       theme: ['auto', 'dark', 'light'],
       layout: ['grid', 'list'],
@@ -353,9 +468,6 @@ async function handleApi(req, res, ctx) {
 
     const sorts = ['manual', 'name', 'status'];
     next.dashboardSort = sorts.includes(next.dashboardSort) ? next.dashboardSort : cfg.settings.dashboardSort;
-    next.categoryOrder = Array.isArray(next.categoryOrder)
-      ? next.categoryOrder.map((c) => String(c).trim().slice(0, 40)).filter(Boolean).slice(0, 40)
-      : cfg.settings.categoryOrder;
 
     const interval = Number(next.healthCheckSeconds);
     next.healthCheckSeconds = Number.isFinite(interval) ? Math.min(600, Math.max(5, Math.round(interval))) : 30;
@@ -375,7 +487,7 @@ async function handleApi(req, res, ctx) {
 
   if (pathname === '/api/export' && method === 'GET') {
     if (requireAuth()) return undefined;
-    res.setHeader('content-disposition', 'attachment; filename="unraid-proxy-backup.json"');
+    res.setHeader('content-disposition', 'attachment; filename="localizer-backup.json"');
     return sendJson(res, 200, { version: cfg.version, settings: cfg.settings, services: cfg.services });
   }
 

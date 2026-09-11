@@ -1,0 +1,86 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>localizer</Name>
+  <Repository>ghcr.io/nickhighland/localizer:latest</Repository>
+  <Registry>https://github.com/nickhighland/localizer/pkgs/container/localizer</Registry>
+  <Branch>
+    <Tag>latest</Tag>
+    <TagDescription>Current release</TagDescription>
+  </Branch>
+  <Network>br0</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/nickhighland/localizer/issues</Support>
+  <Project>https://github.com/nickhighland/localizer</Project>
+  <Overview>
+    Localizer gives every Docker container on your server a name.
+
+    Map 192.168.1.50:8080 to openwebui.local, 192.168.1.50:8989 to sonarr.local, and so on. Localizer
+    runs a reverse proxy that routes by hostname and an mDNS responder that makes those .local names
+    resolve across your LAN &#8212; no router, Pi-hole or hosts-file changes needed on any client.
+    Other suffixes (home.arpa, internal, lan) work too.
+
+    With the Docker socket mapped in, "Refresh from Unraid" finds the containers you are running and
+    keeps the tiles in step with them: new containers are offered, deleted ones flagged, moved ports
+    shown &#8212; and nothing changes until you tick it. The launch screen has live up/down
+    indicators, categories you can create, rename and drag between, and an edit button on every tile.
+
+    SETUP &#8212; THREE STEPS:
+
+    1. Give Localizer its OWN IP ADDRESS. Set Network Type to "Custom: br0" and enter a Fixed IP
+    outside your DHCP pool. The Unraid webGUI already owns port 80 on the host, and mDNS needs real
+    multicast, so the default bridge network will not work.
+
+    2. Attach a second network after the first start, in a terminal:
+
+    docker network connect bridge localizer
+
+    br0 is a macvlan or ipvlan network, and a container on it cannot reach its own host, so without
+    this every mapped service reads as offline. Pressing Apply recreates the container and drops the
+    attachment; to make it permanent, install unraid/localizer-bridge.sh from the project with the
+    User Scripts plugin, scheduled At Startup of Array. Localizer reports it in its log and System tab
+    if the attachment is missing.
+
+    3. The Docker Socket path is optional. It enables "Refresh from Unraid". Localizer only reads from
+    it, but anything holding the socket can control Docker, and a read-only mount does not change
+    that. Remove the path if you would rather not.
+
+    First run: browse to the IP you assigned and create your login. Nothing is preconfigured and
+    there is no default password.
+  </Overview>
+  <Category>Network:Proxy Network:DNS Tools:Utilities</Category>
+  <WebUI>http://[IP]:[PORT:80]/</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/nickhighland/localizer/main/unraid/localizer.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/nickhighland/localizer/main/branding/icon.png</Icon>
+  <ExtraParams/>
+  <PostArgs/>
+  <DonateText/>
+  <DonateLink/>
+  <Description>
+    Gives every Docker container a .local name: reverse proxy, mDNS responder, container discovery and a
+    dashboard. Requires its own IP on br0.
+  </Description>
+
+  <Config Name="Config Storage" Target="/config" Default="/mnt/user/appdata/localizer"
+          Mode="rw"
+          Description="Stores config.json &#8212; routes, categories, settings, cached icons and your login."
+          Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/localizer</Config>
+
+  <Config Name="Docker Socket" Target="/var/run/docker.sock" Default="/var/run/docker.sock"
+          Mode="ro"
+          Description="Optional. Enables &quot;Refresh from Unraid&quot;. Localizer only reads from it, but anything holding the socket can control Docker; a read-only mount does not change that."
+          Type="Path" Display="always" Required="false" Mask="false">/var/run/docker.sock</Config>
+
+  <Config Name="HTTP Port" Target="80" Default="80" Mode="tcp"
+          Description="Port the proxy and web UI listen on. Leave at 80 so your URLs stay clean; the container has its own IP, so nothing else is using it."
+          Type="Port" Display="always" Required="true" Mask="false">80</Config>
+
+  <Config Name="mDNS Port" Target="5353" Default="5353" Mode="udp"
+          Description="Multicast DNS. Leave at 5353 &#8212; clients will not find .local names on any other port."
+          Type="Port" Display="advanced" Required="false" Mask="false">5353</Config>
+
+  <Config Name="HTTP_PORT" Target="HTTP_PORT" Default="80"
+          Description="Must match the HTTP Port above."
+          Type="Variable" Display="advanced" Required="false" Mask="false">80</Config>
+</Container>

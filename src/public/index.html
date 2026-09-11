@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Services</title>
+<title>Localizer</title>
 <link rel="stylesheet" href="/assets/style.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><text y='19' font-size='19'>🔗</text></svg>">
 </head>
@@ -22,6 +22,8 @@
       <option value="name">By name</option>
       <option value="status">By status</option>
     </select>
+    <button id="addCategoryBtn" class="btn btn-sm" type="button" title="Create a category" hidden>+ Category</button>
+    <button id="discoverBtn" class="btn btn-sm" type="button" title="Compare tiles with the containers Unraid is running" hidden><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>Containers</button>
     <button id="newTabToggle" class="btn btn-sm" type="button" title="Toggle where links open"></button>
     <a class="btn btn-sm" id="adminLink" href="/admin">Admin</a>
   </header>

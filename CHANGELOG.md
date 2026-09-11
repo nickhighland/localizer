@@ -1,5 +1,45 @@
 # Changelog
 
+## 2.0.0
+
+**Unraid Reverse Proxy is now Localizer.** The repository, the container image and the container
+name all change:
+
+| | Before | Now |
+|---|---|---|
+| Repository | `nickhighland/unraid-reverse-proxy` | `nickhighland/localizer` |
+| Image | `ghcr.io/nickhighland/unraid-reverse-proxy` | `ghcr.io/nickhighland/localizer` |
+| Container | `unraid-reverse-proxy` | `localizer` |
+| Admin hostname on new installs | `proxy.local` | `localizer.local` |
+
+GitHub redirects the old repository address. The old image stops receiving updates at 1.3.0.
+Existing configuration is carried over untouched, including an admin hostname you already set.
+
+### Added
+
+- **Refresh from Unraid.** With the Docker socket mapped in read-only, Localizer compares its tiles
+  with the containers Docker reports and lists what is new, gone or moved; only ticked changes
+  apply, and moved ports start unticked. It reads Unraid's own WebUI and icon labels, treats
+  `[PORT:n]` as a container port and a literal port as a host port, and handles host networking,
+  macvlan and ipvlan, and containers that share another container's network.
+- **Tiles stay linked to their containers.** A tile records the container it came from, so renaming
+  it never makes that container look new or deleted. Existing tiles are linked on startup.
+- **An edit button on every tile.** Signed in, each tile has one in its bottom-right corner, for
+  renaming it, changing its icon, or moving it to another category.
+- **Categories you can manage directly.** Create empty categories, rename and delete them from their
+  dashboard headings or from Settings → Categories, and drag them into order. Deleting a category
+  moves its tiles to Ungrouped. Names are case-insensitive, so `media` files under `Media`.
+- `unraid/localizer-bridge.sh`, a User Scripts boot script that re-attaches the bridge network after
+  a reboot or a template Apply.
+
+### Changed
+
+- Settings forms no longer carry the category list, so a form left open in one tab cannot undo a
+  category created in another.
+- Visitors who are not signed in no longer see empty categories.
+- "Sign in" on the dashboard now returns you to the dashboard.
+
+
 ## 1.3.0
 
 ### Added

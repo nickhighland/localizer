@@ -5,7 +5,7 @@
 # size of the full node image.
 FROM alpine:3.22
 
-LABEL org.opencontainers.image.title="Unraid Reverse Proxy" \
+LABEL org.opencontainers.image.title="Localizer" \
       org.opencontainers.image.description="Maps Unraid Docker containers to .local hostnames with a dashboard, admin UI and built-in mDNS responder." \
       org.opencontainers.image.licenses="MIT"
 
@@ -28,5 +28,6 @@ EXPOSE 80/tcp 5353/udp
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD wget -qO- "http://127.0.0.1:${HTTP_PORT}/healthz" >/dev/null 2>&1 || exit 1
 
-# Runs as root so it can bind port 80 and join the mDNS multicast group.
+# Runs as root so it can bind port 80, join the mDNS multicast group and read
+# the Docker socket when one is mapped in.
 CMD ["node", "src/server.js"]
