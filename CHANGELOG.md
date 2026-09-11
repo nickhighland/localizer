@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.0.1
+
+### Fixed
+
+- A tile pointed at a different port of a container than the one its Unraid WebUI label names was
+  never linked to that container, so **Refresh from Unraid** offered the container again as new —
+  and applying the defaults would have added a duplicate tile. Found on a real server, where a
+  container publishes its web UI on 8081 and a second page on 8082, and the tile used 8082. A tile
+  that targets any port a container publishes, or any port on a macvlan container's own address,
+  now links to it; the difference shows under *Moved*, unticked. When two tiles point at one
+  container, the one on the WebUI port still claims it.
+
+
 ## 2.0.0
 
 **Unraid Reverse Proxy is now Localizer.** The repository, the container image and the container

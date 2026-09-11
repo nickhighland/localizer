@@ -91,13 +91,13 @@ function resolveTarget(container, ctx) {
 
   // Host networking: no translation, and the host is reached via the gateway.
   if (String(source.HostConfig?.NetworkMode || '') === 'host') {
-    return { scheme: webui.scheme, host: ctx.gateway, port: webui.port };
+    return { scheme: webui.scheme, host: ctx.gateway, port: webui.port, ports: [webui.port] };
   }
 
   // macvlan/ipvlan (Unraid's br0): its own LAN address and no port mapping.
   const lan = Object.entries(source.NetworkSettings?.Networks || {})
     .find(([name, net]) => LAN_DRIVERS.has(ctx.drivers.get(name)) && net && net.IPAddress);
-  if (lan) return { scheme: webui.scheme, host: lan[1].IPAddress, port: webui.port };
+  if (lan) return { scheme: webui.scheme, host: lan[1].IPAddress, port: webui.port, anyPort: true };
 
   const { published, containerToHost } = tcpBindings(source.Ports);
   if (!published.size && source.State && source.State !== 'running') {
@@ -109,7 +109,9 @@ function resolveTarget(container, ctx) {
     : (published.has(webui.port) ? webui.port : (containerToHost.get(webui.port) ?? null));
 
   if (!port) return { reason: `Port ${webui.port} is not published to the host.` };
-  return { scheme: webui.scheme, host: ctx.gateway, port };
+  return {
+    scheme: webui.scheme, host: ctx.gateway, port, ports: [...published],
+  };
 }
 
 function isSelf(container, selfId) {
@@ -137,7 +139,15 @@ function buildEntries(containers, networks, { selfId = null, hostAddress = null 
       icon: normalizeIconUrl((container.Labels || {})[LABEL_ICON]) || '',
     };
     if (target.reason) entry.reason = target.reason;
-    else Object.assign(entry, { scheme: target.scheme, host: target.host, port: target.port });
+    else {
+      Object.assign(entry, {
+        scheme: target.scheme,
+        host: target.host,
+        port: target.port,
+        ports: target.ports || [],
+        anyPort: Boolean(target.anyPort),
+      });
+    }
     entries.push(entry);
   }
   entries.sort((a, b) => a.container.localeCompare(b.container, undefined, { sensitivity: 'base' }));
@@ -164,7 +174,8 @@ async function scan({ socketPath = docker.DEFAULT_SOCKET } = {}) {
 /**
  * Decides which container each configured service belongs to: its stored
  * binding first, then an exact name match, then an unambiguous match on address
- * and port. Services matching nothing are left alone — they point at something
+ * and port, and finally a match on any other port that container publishes.
+ * Services matching nothing are left alone — they point at something
  * outside Docker, and discovery has no opinion about them.
  */
 function computeBindings(cfg, entries) {
@@ -191,6 +202,21 @@ function computeBindings(cfg, entries) {
     if (bindings.has(service.id)) continue;
     const hits = entries.filter((e) => !e.reason && !claimed.has(lower(e.container))
       && e.host === service.host && e.port === service.port);
+    if (hits.length === 1) {
+      bindings.set(service.id, hits[0].container);
+      claimed.add(lower(hits[0].container));
+    }
+  }
+  // A container can serve more than one page, and a tile may point at a port
+  // other than the one its WebUI label names. It still belongs to that
+  // container: linking it shows the difference as a move, where leaving it
+  // unlinked would offer the container again as new and make a duplicate.
+  // Runs after the exact pass, so an exact match always claims first.
+  for (const service of cfg.services) {
+    if (bindings.has(service.id)) continue;
+    const hits = entries.filter((e) => !e.reason && !claimed.has(lower(e.container))
+      && e.host === service.host
+      && (e.anyPort || (e.ports || []).includes(service.port)));
     if (hits.length === 1) {
       bindings.set(service.id, hits[0].container);
       claimed.add(lower(hits[0].container));

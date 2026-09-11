@@ -1,6 +1,6 @@
 {
   "name": "localizer",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Gives every Docker container on an Unraid server a .local name: reverse proxy, mDNS responder, container discovery and a dashboard.",
   "main": "src/server.js",
   "scripts": {

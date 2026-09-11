@@ -172,6 +172,41 @@ test('a corrected scheme is not offered back as a change', () => {
   assert.equal(p.unchanged, 1);
 });
 
+test('a tile on another published port of a container is linked, and shown as moved', () => {
+  // book-downloader publishes 8184 and 8384; its WebUI label names the port that
+  // maps to 8384. A tile left on 8184 still belongs to that container.
+  const p = discovery.plan(cfgWith([
+    { id: 'bd', name: 'Books', hostname: 'books', host: '172.17.0.1', port: 8184 },
+  ]), scanned);
+  assert.ok(!p.added.some((a) => a.container === 'book-downloader'), 'not offered again as new');
+  assert.deepEqual(p.changed.map((c) => [c.container, c.from.port, c.to.port]), [['book-downloader', 8184, 8384]]);
+});
+
+test('a tile on any port of a macvlan container is linked to it', () => {
+  const p = discovery.plan(cfgWith([
+    { id: 'ag', name: 'DNS', hostname: 'dns', host: '192.168.1.19', port: 80 },
+  ]), scanned);
+  assert.ok(!p.added.some((a) => a.container === 'AdGuard-Home'));
+  assert.equal(p.changed[0].container, 'AdGuard-Home');
+});
+
+test('an exact match claims a container before a tile on one of its other ports can', () => {
+  const p = discovery.plan(cfgWith([
+    { id: 'api', name: 'Books API', hostname: 'books-api', host: '172.17.0.1', port: 8184 },
+    { id: 'ui', name: 'Books UI', hostname: 'books-ui', host: '172.17.0.1', port: 8384 },
+  ]), scanned);
+  assert.equal(p.unchanged, 1, 'the tile on the WebUI port is linked and up to date');
+  assert.equal(p.changed.length, 0, 'the other tile is left alone, not dragged onto the same container');
+  assert.ok(!p.added.some((a) => a.container === 'book-downloader'));
+});
+
+test('a port that nothing publishes links nothing', () => {
+  const p = discovery.plan(cfgWith([
+    { id: 'x', name: 'Mystery', hostname: 'mystery', host: '172.17.0.1', port: 9999 },
+  ]), scanned);
+  assert.deepEqual([p.changed.length, p.removed.length, p.unchanged], [0, 0, 0]);
+});
+
 test('new hostnames avoid ones already in use', () => {
   const p = discovery.plan(cfgWith([
     { id: 'x', name: 'Something else', hostname: 'sonarr', host: '10.0.0.5', port: 1 },
