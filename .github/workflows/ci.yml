@@ -1,15 +1,9 @@
 name: CI
 
-
-
-
 on:
   push:
     branches: [main]
   pull_request:
-
-
-
 
 jobs:
   test:
@@ -22,9 +16,6 @@ jobs:
       # No dependencies to install — the app uses only the Node standard library.
       - name: Run tests
         run: node --test 'test/*.test.js'
-
-
-
 
   build:
     runs-on: [self-hosted, linux, x64, unraid]
@@ -42,3 +33,9 @@ jobs:
               echo "healthy after ${i}s"
               curl -fsS http://127.0.0.1:8080/healthz
               exit 0
+            fi
+            sleep 1
+          done
+          echo "container never became healthy" >&2
+          docker logs ci >&2
+          exit 1
